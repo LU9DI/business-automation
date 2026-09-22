@@ -1,0 +1,5 @@
+import { Router } from "express";
+import { validateWorkflow } from "../domain/workflows.js";
+const router=Router();
+router.post("/validate",(req,res)=>{try{validateWorkflow(req.body);res.json({valid:true});}catch(error){res.status(400).json({valid:false,error:error instanceof Error?error.message:"invalid workflow"});}});
+export default router;
