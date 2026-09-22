@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS app_users (id UUID PRIMARY KEY, email TEXT UNIQUE NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
