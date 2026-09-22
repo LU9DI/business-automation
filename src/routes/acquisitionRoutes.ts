@@ -55,7 +55,7 @@ router.post("/leads",requireAuth,async(req,res)=>{
     
     const b=req.body||{}, owner=userId(req);
     const email=typeof b.email==="string"?b.email.trim().toLowerCase():null;
-    if(email && (email.length>254 || !/^[^\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))) return res.status(400).json({error:"invalid email"});
+    if(email && (email.length>254 || !/^[^\s@]+@[^\s@]+\.[^\\s@]+$/.test(email))) return res.status(400).json({error:"invalid email"});
     const name=clean(b.name,160),company=clean(b.company,200),source=clean(b.source,80)||"organic";
     const country=clean(b.country,80),language=clean(b.language,20);
     const rawScore=b.score==null?null:Number(b.score);
