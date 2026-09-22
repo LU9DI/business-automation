@@ -19,7 +19,7 @@ app.set("trust proxy", 1);
 app.use(requestId);
 app.use(rateLimit);
 app.use(cors(origins?.length ? { origin: origins, credentials: true } : { origin: false }));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "1mb", verify: (req, _res, buf) => { (req as any).rawBody = Buffer.from(buf); } }));
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
