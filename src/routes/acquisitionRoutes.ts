@@ -47,7 +47,7 @@ router.get("/sitemap.xml", (_req,res) => {
 });
 router.get("/robots.txt", (_req,res) => {
   const base=(process.env.PUBLIC_SITE_URL||"").replace(/\/$/,"");
-  res.type("text/plain").send(`User-agent: *\\nAllow: /\\nSitemap: ${base}/api/acquisition/sitemap.xml\\n`);
+  res.type("text/plain").send(`User-agent: *\nAllow: /\nSitemap: ${base}/api/acquisition/sitemap.xml\n`);
 });
 
 router.post("/leads",requireAuth,async(req,res)=>{
