@@ -34,6 +34,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/workflows", workflowRoutes);
 app.use("/api/webhooks", webhookRoutes);
 
+app.use("/api/acquisition", acquisitionRoutes);
+
 app.get("/api/health", async (_req, res) => {
   try { await initDb().query("SELECT 1"); res.json({ ok: true, service: "business-automation", database: "ok" }); }
   catch { res.status(503).json({ ok: false, database: "error" }); }
