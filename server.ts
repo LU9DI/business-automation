@@ -2,6 +2,7 @@ import authRoutes from "./src/routes/authRoutes.js";
 import workflowRoutes from "./src/routes/workflowRoutes.js";
 import webhookRoutes from "./src/routes/webhookRoutes.js";
 import express from "express";
+import acquisitionRoutes from "./src/routes/acquisitionRoutes.js";
 import cors from "cors";
 import { initDb } from "./src/core/db.js";
 import { metricsMiddleware, metricsSnapshot } from "./src/core/metrics.js";
