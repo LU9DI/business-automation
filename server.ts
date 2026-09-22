@@ -1,3 +1,4 @@
+import workflowRoutes from "./src/routes/workflowRoutes.js";
 import express from "express";
 import cors from "cors";
 import { initDb } from "./src/core/db.js";
@@ -11,6 +12,8 @@ app.disable("x-powered-by");
 app.use(cors(origin ? { origin: origin.split(",").map(v => v.trim()), credentials: true } : undefined));
 app.use(express.json({ limit: "1mb" }));
 app.use(metricsMiddleware);
+
+app.use("/api/workflows", workflowRoutes);
 
 app.get("/api/health", async (_req, res) => {
   try {
