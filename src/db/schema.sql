@@ -1,22 +1,10 @@
-CREATE TABLE IF NOT EXISTS app_users (
-  id UUID PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+CREATE TABLE IF NOT EXISTS app_users (id UUID PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT;
 CREATE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
-
-CREATE TABLE IF NOT EXISTS workflows (
-  id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT false, steps JSONB NOT NULL DEFAULT '[]'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_workflows_user_updated ON workflows(user_id, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS workflow_runs (
-  id UUID PRIMARY KEY, workflow_id UUID NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-  status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed')),
-  input JSONB NOT NULL DEFAULT '{}'::jsonb, output JSONB NOT NULL DEFAULT '{}'::jsonb,
-  error TEXT, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_created ON workflow_runs(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_created ON workflow_runs(workflow_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS workflows (id UUID PRIMARY KEY,user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,name TEXT NOT NULL,enabled BOOLEAN NOT NULL DEFAULT false,steps JSONB NOT NULL DEFAULT '[]'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS idx_workflows_user_updated ON workflows(user_id,updated_at DESC);
+CREATE TABLE IF NOT EXISTS workflow_runs (id UUID PRIMARY KEY,workflow_id UUID NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed')),input JSONB NOT NULL DEFAULT '{}'::jsonb,output JSONB NOT NULL DEFAULT '{}'::jsonb,error TEXT,started_at TIMESTAMPTZ,finished_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_created ON workflow_runs(user_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_created ON workflow_runs(workflow_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS workflow_webhooks (id UUID PRIMARY KEY,workflow_id UUID NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,secret TEXT NOT NULL,active BOOLEAN NOT NULL DEFAULT true,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(workflow_id));
+CREATE INDEX IF NOT EXISTS idx_workflow_webhooks_user ON workflow_webhooks(user_id);
