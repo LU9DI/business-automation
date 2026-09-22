@@ -1,26 +1,14 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { prepareWorkflow, executeWorkflow } from "../services/workflowService.js";
+import { listConnectors } from "../services/connectors.js";
 import { initDb } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
 const router=Router();
-
 router.post("/",requireAuth,async(req,res)=>{try{const w=prepareWorkflow(req.body);const id=randomUUID();await initDb().query("INSERT INTO workflows (id,user_id,name,enabled,steps) VALUES ($1,$2,$3,$4,$5)",[id,(req as any).userId,w.name,w.enabled,JSON.stringify(w.steps)]);res.status(201).json({id,workflow:w});}catch(e){res.status(400).json({valid:false,error:e instanceof Error?e.message:"invalid workflow"});}});
-
 router.get("/",requireAuth,async(req,res)=>{try{const r=await initDb().query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100",[(req as any).userId]);res.json({workflows:r.rows});}catch{res.status(500).json({error:"failed to load workflows"});}});
-
-router.post("/validate",requireAuth,(req,res)=>{try{res.json({valid:true,workflow:prepareWorkflow(req.body)});}catch(e){res.status(400).json({valid:false,error:e instanceof Error?e.message:"invalid workflow"});}});
-
-router.post("/:id/run",requireAuth,async(req,res)=>{const userId=(req as any).userId; const db=await initDb(); const runId=randomUUID();
-  try{const r=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2",[req.params.id,userId]); if(!r.rowCount) return res.status(404).json({error:"workflow not found"});
-    const workflow=prepareWorkflow(r.rows[0]); if(!workflow.enabled) return res.status(409).json({error:"workflow is disabled"});
-    await db.query("INSERT INTO workflow_runs (id,workflow_id,user_id,status,input,started_at) VALUES ($1,$2,$3,'running',$4,now())",[runId,req.params.id,userId,JSON.stringify(req.body||{})]);
-    const result=executeWorkflow(workflow,req.body||{});
-    await db.query("UPDATE workflow_runs SET status='succeeded',output=$1,finished_at=now() WHERE id=$2",[JSON.stringify(result.output),runId]);
-    res.json({runId,...result});
-  }catch(e){await db.query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",[e instanceof Error?e.message:"execution failed",runId]).catch(()=>{});res.status(400).json({error:e instanceof Error?e.message:"execution failed",runId});}
-});
-
+router.get("/connectors",requireAuth,(_req,res)=>res.json({connectors:listConnectors()}));
+router.post("/validate",requireAuth,(req,res)=>{try{const w=prepareWorkflow(req.body);for(const step of w.steps){if(!listConnectors().includes(String(step.type||"").trim()))return res.status(400).json({valid:false,error:"unsupported connector: "+String(step.type||"")});}res.json({valid:true,workflow:w,connectors:listConnectors()});}catch(e){res.status(400).json({valid:false,error:e instanceof Error?e.message:"invalid workflow"});}});
+router.post("/:id/run",requireAuth,async(req,res)=>{const userId=(req as any).userId;const db=initDb();const runId=randomUUID();try{const r=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2",[req.params.id,userId]);if(!r.rowCount)return res.status(404).json({error:"workflow not found"});const workflow=prepareWorkflow(r.rows[0]);if(!workflow.enabled)return res.status(409).json({error:"workflow is disabled"});await db.query("INSERT INTO workflow_runs (id,workflow_id,user_id,status,input,started_at) VALUES ($1,$2,$3,'running',$4,now())",[runId,req.params.id,userId,JSON.stringify(req.body||{})]);const result=await executeWorkflow(workflow,req.body||{});await db.query("UPDATE workflow_runs SET status='succeeded',output=$1,finished_at=now() WHERE id=$2",[JSON.stringify(result.output),runId]);res.json({runId,...result});}catch(e){await db.query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",[e instanceof Error?e.message:"execution failed",runId]).catch(()=>{});res.status(400).json({error:e instanceof Error?e.message:"execution failed",runId});}});
 router.get("/runs",requireAuth,async(req,res)=>{try{const r=await initDb().query("SELECT id,workflow_id,status,input,output,error,started_at,finished_at,created_at FROM workflow_runs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100",[(req as any).userId]);res.json({runs:r.rows});}catch{res.status(500).json({error:"failed to load runs"});}});
-
 export default router;
