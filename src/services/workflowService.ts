@@ -31,7 +31,7 @@ export async function executeWorkflow(workflow: Workflow, input: Record<string, 
     if (!connector) throw new Error("unsupported connector: " + type);
 
     const result = await withTimeout(
-      connector.execute({ input: current, config: step.config || {} }),
+      Promise.resolve(connector.execute({ input: current, config: step.config || {} })),
       STEP_TIMEOUT_MS
     );
     current = { ...current, ...(result?.data || {}) };
