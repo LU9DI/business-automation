@@ -87,7 +87,7 @@ router.post("/content",requireAuth,async(req,res)=>{
     const hash=createHash("sha256").update(channel+"\n"+title+"\n"+body).digest("hex");
     const id=randomUUID();
     const r=await initDb().query(
-      "INSERT INTO acquisition_content(id,channel,title,body,slug,content_hash,status,scheduled_at,utm_campaign,owner_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(content_hash) DO NOTHING RETURNING id,status",
+      "INSERT INTO acquisition_content(id,channel,title,body,slug,content_hash,status,scheduled_at,utm_campaign,owner_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(owner_id,content_hash) WHERE owner_id IS NOT NULL DO NOTHING RETURNING id,status",
       [id,channel,title,body,slug,hash,status,scheduledAt,utmCampaign,owner]);
     if(!r.rowCount) return res.status(409).json({error:"duplicate content",contentHash:hash});
     res.status(201).json({id:r.rows[0].id,status:r.rows[0].status,contentHash:hash});
