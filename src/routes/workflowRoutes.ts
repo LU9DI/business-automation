@@ -1,6 +1,10 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { prepareWorkflow } from "../services/workflowService.js";
+import { initDb } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
 const router=Router();
+router.post("/",requireAuth,async(req,res)=>{try{const w=prepareWorkflow(req.body);const id=randomUUID();await initDb().query("INSERT INTO workflows (id,user_id,name,enabled,steps) VALUES ($1,$2,$3,$4,$5)",[id,(req as any).userId,w.name,w.enabled,JSON.stringify(w.steps)]);res.status(201).json({id,workflow:w});}catch(e){res.status(400).json({valid:false,error:e instanceof Error?e.message:"invalid workflow"});}});
+router.get("/",requireAuth,async(req,res)=>{try{const r=await initDb().query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100",[(req as any).userId]);res.json({workflows:r.rows});}catch{res.status(500).json({error:"failed to load workflows"});}});
 router.post("/validate",requireAuth,(req,res)=>{try{res.json({valid:true,workflow:prepareWorkflow(req.body)});}catch(e){res.status(400).json({valid:false,error:e instanceof Error?e.message:"invalid workflow"});}});
 export default router;
