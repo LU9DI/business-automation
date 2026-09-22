@@ -5,7 +5,7 @@ import { initDb } from "../core/db.js";
 import { issueToken } from "../core/auth.js";
 
 const router = Router();
-const emailOf = (v: unknown) => String(v ?? "").trim().toLowerCase();
+const emailOf = (value: unknown) => String(value ?? "").trim().toLowerCase();
 
 router.post("/register", async (req, res) => {
   const email = emailOf(req.body?.email);
@@ -19,8 +19,8 @@ router.post("/register", async (req, res) => {
     const id = randomUUID();
     await db.query("INSERT INTO app_users (id,email,password_hash) VALUES ($1,$2,$3)", [id, email, hash]);
     return res.status(201).json({ user: { id, email }, token: issueToken(id) });
-  } catch (e: any) {
-    if (e?.code === "23505") return res.status(409).json({ error: "email already registered" });
+  } catch (error: any) {
+    if (error?.code === "23505") return res.status(409).json({ error: "email already registered" });
     return res.status(500).json({ error: "registration failed" });
   }
 });
