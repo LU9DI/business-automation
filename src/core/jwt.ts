@@ -17,7 +17,6 @@ export function requireJwtSecret() {
 export function signAccessToken(payload: AuthPayload) {
   return jwt.sign(payload, requireJwtSecret(), {
     expiresIn: 86400,
-    header: { kid: process.env.JWT_KID || "v1" },
   });
 }
 
