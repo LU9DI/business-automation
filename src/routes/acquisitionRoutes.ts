@@ -40,40 +40,6 @@ function boundedMetadata(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-async function ensureSchema() {
-  const db = initDb();
-  await db.query(`CREATE TABLE IF NOT EXISTS acquisition_leads(
-    id uuid PRIMARY KEY,email text,name text,company text,source text NOT NULL,
-    country text,language text,score integer,status text NOT NULL DEFAULT 'researched',
-    last_contact_at timestamptz,created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),owner_id text
-  )`);
-  await db.query(`CREATE TABLE IF NOT EXISTS acquisition_content(
-    id uuid PRIMARY KEY,channel text NOT NULL,title text NOT NULL,body text NOT NULL,slug text,
-    content_hash text NOT NULL UNIQUE,status text NOT NULL DEFAULT 'researched',
-    scheduled_at timestamptz,published_at timestamptz,utm_campaign text,
-    created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),
-    owner_id text
-  )`);
-  await db.query(`CREATE TABLE IF NOT EXISTS acquisition_events(
-    id uuid PRIMARY KEY,lead_id uuid REFERENCES acquisition_leads(id) ON DELETE SET NULL,
-    content_id uuid REFERENCES acquisition_content(id) ON DELETE SET NULL,type text NOT NULL,
-    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,created_at timestamptz NOT NULL DEFAULT now(),
-    owner_id text,idempotency_key text
-  )`);
-  await db.query("ALTER TABLE acquisition_leads ADD COLUMN IF NOT EXISTS owner_id text");
-  await db.query("ALTER TABLE acquisition_content ADD COLUMN IF NOT EXISTS owner_id text");
-  await db.query("ALTER TABLE acquisition_events ADD COLUMN IF NOT EXISTS owner_id text");
-  await db.query("ALTER TABLE acquisition_events ADD COLUMN IF NOT EXISTS idempotency_key text");
-  await db.query("CREATE INDEX IF NOT EXISTS acquisition_leads_owner_idx ON acquisition_leads(owner_id,created_at DESC)");
-  await db.query("CREATE INDEX IF NOT EXISTS acquisition_content_owner_idx ON acquisition_content(owner_id,created_at DESC)");
-  await db.query("CREATE INDEX IF NOT EXISTS acquisition_events_owner_idx ON acquisition_events(owner_id,created_at DESC)");
-  await db.query("CREATE UNIQUE INDEX IF NOT EXISTS acquisition_events_owner_idempotency_idx ON acquisition_events(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL");
-  await db.query("CREATE INDEX IF NOT EXISTS acquisition_leads_status_idx ON acquisition_leads(owner_id,status,created_at DESC)");
-  await db.query("CREATE INDEX IF NOT EXISTS acquisition_content_channel_idx ON acquisition_content(owner_id,channel,status,created_at DESC)");
-  await db.query("CREATE INDEX IF NOT EXISTS acquisition_events_created_idx ON acquisition_events(created_at DESC)");
-}
-
 router.get("/seo/manifest", (_req,res) => res.json({product:PRODUCT,canonicalBase:process.env.PUBLIC_SITE_URL||null,pages:SEO}));
 router.get("/sitemap.xml", (_req,res) => {
   const base=(process.env.PUBLIC_SITE_URL||"").replace(/\/$/,"");
@@ -86,7 +52,7 @@ router.get("/robots.txt", (_req,res) => {
 
 router.post("/leads",requireAuth,async(req,res)=>{
   try {
-    await ensureSchema();
+    
     const b=req.body||{}, owner=userId(req);
     const email=typeof b.email==="string"?b.email.trim().toLowerCase():null;
     if(email && (email.length>254 || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))) return res.status(400).json({error:"invalid email"});
@@ -104,7 +70,7 @@ router.post("/leads",requireAuth,async(req,res)=>{
 });
 
 router.get("/leads",requireAuth,async(req,res)=>{
-  try { await ensureSchema(); const r=await initDb().query(
+  try {  const r=await initDb().query(
     "SELECT id,email,name,company,source,country,language,score,status,last_contact_at,created_at FROM acquisition_leads WHERE owner_id=$1 ORDER BY created_at DESC LIMIT 100",[userId(req)]);
     res.json({leads:r.rows});
   } catch { res.status(500).json({error:"failed to list leads"}); }
@@ -112,7 +78,7 @@ router.get("/leads",requireAuth,async(req,res)=>{
 
 router.post("/content",requireAuth,async(req,res)=>{
   try {
-    await ensureSchema(); const b=req.body||{}, owner=userId(req);
+     const b=req.body||{}, owner=userId(req);
     const channel=String(b.channel||"").trim().toLowerCase(), title=clean(b.title,300), body=clean(b.body,100000);
     if(!CHANNELS.has(channel)||!title||!body) return res.status(400).json({error:"invalid channel, title or body"});
     const status=validStatus(b.status); if(!status) return res.status(400).json({error:"invalid status"});
@@ -129,7 +95,7 @@ router.post("/content",requireAuth,async(req,res)=>{
 });
 
 router.get("/content",requireAuth,async(req,res)=>{
-  try { await ensureSchema(); const r=await initDb().query(
+  try {  const r=await initDb().query(
     "SELECT id,channel,title,slug,status,scheduled_at,published_at,utm_campaign,created_at FROM acquisition_content WHERE owner_id=$1 ORDER BY created_at DESC LIMIT 100",[userId(req)]);
     res.json({content:r.rows});
   } catch { res.status(500).json({error:"failed to list content"}); }
@@ -137,7 +103,7 @@ router.get("/content",requireAuth,async(req,res)=>{
 
 router.post("/events",requireAuth,async(req,res)=>{
   try {
-    await ensureSchema(); const b=req.body||{}, owner=userId(req), type=clean(b.type,80);
+     const b=req.body||{}, owner=userId(req), type=clean(b.type,80);
     if(!type) return res.status(400).json({error:"event type is required"});
     const leadId=b.leadId==null?null:validUuid(b.leadId);
     const contentId=b.contentId==null?null:validUuid(b.contentId);
@@ -155,7 +121,7 @@ router.post("/events",requireAuth,async(req,res)=>{
 
 router.get("/report",requireAuth,async(req,res)=>{
   try {
-    await ensureSchema(); const db=initDb(), owner=userId(req);
+     const db=initDb(), owner=userId(req);
     const [leads,content,events]=await Promise.all([
       db.query("SELECT status,count(*)::int count FROM acquisition_leads WHERE owner_id=$1 GROUP BY status",[owner]),
       db.query("SELECT channel,status,count(*)::int count FROM acquisition_content WHERE owner_id=$1 GROUP BY channel,status",[owner]),
