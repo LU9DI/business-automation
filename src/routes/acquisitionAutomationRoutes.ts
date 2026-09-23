@@ -85,7 +85,7 @@ async function githubOidcAuthorized(req:any){
 
 router.post("/cron",async(req,res)=>{
  if(await githubOidcAuthorized(req)){
-  const owners=(await initDb().query("SELECT DISTINCT owner_id FROM acquisition_leads WHERE owner_id IS NOT NULL")).rows.map((r:any)=>String(r.owner_id));
+  const owners=(await initDb().query("SELECT DISTINCT owner_id FROM acquisition_leads WHERE owner_id IS NOT NULL LIMIT 100")).rows.map((r:any)=>String(r.owner_id));
   const results=[];
   for(const owner of owners) results.push({owner,...(await runForOwner(owner,MAX_BATCH,mode(),"cron:"+new Date().toISOString().slice(0,13)))});
   return res.json({ok:true,product:PRODUCT,owners:owners.length,results,generatedAt:new Date().toISOString()});
