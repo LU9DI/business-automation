@@ -7,7 +7,7 @@
 
 ## Phase 2 — Acquisition completion
 - [x] T004 Audit and expand the acquisition funnel/report: leads, outreach, delivery/publication, failures, retries, and conversion signals.
-- [ ] T005 Implement bounded transient-error recovery with idempotent retry attempts. Current retry implementation was reverted after failing production builds; it remains pending and must be implemented with a build-verified approach.
+- [x] T005 — Implement bounded retry/recovery for retryable outreach failures: max 3 attempts, backoff, idempotency, no duplicate send, and exhaustion events. Production deploy verified live.
 - [ ] T006 Add distribution adapters only for verified/configured integrations.
 - [ ] T007 Add end-to-end tests for acquisition idempotency, cooldown, suppression, provider fallback, and failure handling.
 
