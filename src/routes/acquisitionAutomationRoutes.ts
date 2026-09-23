@@ -41,7 +41,7 @@ async function runForOwner(owner:string,limit:number,runMode:string,requestedKey
 
 router.get("/status",requireAuth,async(_req,res)=>res.json({product:PRODUCT,mode:mode(),integrations:integrationStatus(),safety:{cooldownDays:COOLDOWN_DAYS,maxBatch:MAX_BATCH,realSendingRequiresConfiguredProvider:true}}));
 
-router.post("/run",requireAuth,async(req,res)=>{
+router.post("/run",requireAuth,async(req:any,res)=>{
  const owner=String(req.userId||""),key=text(req.get("Idempotency-Key")||req.body?.idempotencyKey,160);
  if(!key)return res.status(400).json({error:"Idempotency-Key is required"});
  const result=await runForOwner(owner,batch(req.body?.limit),mode(),key);
