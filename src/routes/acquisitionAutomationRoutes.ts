@@ -52,7 +52,7 @@ async function retryForOwner(owner:string,limit:number){
   "SELECT DISTINCT ON (e.lead_id) e.id,e.lead_id,e.metadata,l.email FROM acquisition_events e JOIN acquisition_leads l ON l.id=e.lead_id AND l.owner_id=e.owner_id WHERE e.owner_id=$1 AND e.type='outreach_failed' AND COALESCE((e.metadata->>'retryable')::boolean,false)=true AND COALESCE((e.metadata->>'attempt')::int,0)<3 AND e.created_at<=NOW()-INTERVAL '1 hour' AND NOT EXISTS (SELECT 1 FROM acquisition_events n WHERE n.owner_id=e.owner_id AND n.lead_id=e.lead_id AND n.type='outreach_failed' AND n.created_at>e.created_at AND COALESCE(n.metadata->>'fingerprint','')=COALESCE(e.metadata->>'fingerprint','')) ORDER BY e.lead_id,e.created_at DESC LIMIT $2",[owner,limit]);
  let succeeded=0,scheduled=0,exhausted=0;
  for(const row of failed.rows){
-  const meta=row.metadata||{}; const attempt=Number(meta.attempt||0)+1; const fingerprintValue=String(meta.fingerprint||"");
+  const meta:any=row.metadata||{}; const attempt=Number(meta.attempt||0)+1; const fingerprintValue=String(meta.fingerprint||"");
   if(!row.email||!meta.subject||!meta.body) continue;
   try{
    const sent=await sendEmail(String(row.email),String(meta.subject),String(meta.body),String(meta.html||"<p>"+String(meta.body)+"</p>"),"retry:"+row.id+":"+attempt);
@@ -66,7 +66,7 @@ async function retryForOwner(owner:string,limit:number){
    if(!transient){exhausted++; continue;}
   }
   if(attempt>=3){exhausted++; await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_exhausted',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({attempt,sourceEventId:row.id}),owner,"retry-exhausted:"+row.id+":"+attempt]);}
-  else {scheduled++; await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_scheduled',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({attempt,sourceEventId:row.id}),owner,"retry-scheduled:"+row.id+":"+attempt]); await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_failed',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({...meta,attempt}),owner,"failed:"+row.lead_id+":"+row.id+":"+attempt]);}
+  else {scheduled++; await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_scheduled',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({attempt,sourceEventId:row.id}),owner,"retry-scheduled:"+row.id+":"+attempt]); await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_failed',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({product:PRODUCT,channel:"email",retryable:true,attempt,runId:meta.runId,subject:meta.subject,body:meta.body,html:meta.html,fingerprint:meta.fingerprint}),owner,"failed:"+row.lead_id+":"+row.id+":"+attempt]);}
  }
  return {succeeded,scheduled,exhausted};
 }
