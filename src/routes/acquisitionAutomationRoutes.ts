@@ -32,11 +32,46 @@ async function runForOwner(owner:string,limit:number,runMode:string,requestedKey
      await db.query("UPDATE acquisition_leads SET last_contact_at=NOW(),status='executed' WHERE id=$1 AND owner_id=$2",[lead.id,owner]);
      items.push({leadId:lead.id,status:"sent",provider:sent.provider});
     }else items.push({leadId:lead.id,status:"provider-gated"});
-   }catch{items.push({leadId:lead.id,status:"failed"});}
+   }catch(e){
+    try{await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_failed',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[lead.id,JSON.stringify({product:PRODUCT,channel:"email",retryable:true,attempt:0,nextRetryAt:new Date(Date.now()+60*60*1000).toISOString(),subject:draft?.subject||"",body:draft?.text||"",fingerprint:fp||"",reason:"processing_failed"}),owner,"failed:"+lead.id+":"+String(fp||"unknown")]);}catch{}
+    items.push({leadId:lead.id,status:"failed"});}
   }
   return {status:"ok",runId,queued:items.length,sent:items.filter(x=>x.status==="sent").length,items};
  }catch(e){try{await client.query("ROLLBACK")}catch{};return {status:"failed",error:"acquisition run failed",queued:0,sent:0};}
  finally{client.release();}
+}
+
+async function recoverForOwner(owner:string,limit:number,runMode:string){
+ const db=initDb(),client=await db.connect(),items:any[]=[];
+ try{
+  await client.query("BEGIN");
+  const lock=await client.query("SELECT pg_try_advisory_xact_lock(hashtext($1)) locked",["acquisition-recovery:"+PRODUCT+":"+owner]);
+  if(!lock.rows[0].locked){await client.query("ROLLBACK");return {status:"busy",recovered:0};}
+  const failed=await client.query("SELECT e.id,e.lead_id,e.metadata,l.email FROM acquisition_events e JOIN acquisition_leads l ON l.id=e.lead_id AND l.owner_id=e.owner_id WHERE e.owner_id=$1 AND e.type='outreach_failed' AND COALESCE((e.metadata->>'retryable')::boolean,false)=true AND COALESCE((e.metadata->>'attempt')::int,0)<3 AND COALESCE((e.metadata->>'nextRetryAt')::timestamptz,NOW())<=NOW() AND NOT EXISTS (SELECT 1 FROM acquisition_events s WHERE s.owner_id=e.owner_id AND s.lead_id=e.lead_id AND s.type='outreach_sent') ORDER BY e.created_at ASC LIMIT $2 FOR UPDATE OF e SKIP LOCKED",[owner,limit]);
+  await client.query("COMMIT");
+  for(const row of failed.rows){
+   const m:any=row.metadata||{},attempt=Number(m.attempt||0)+1,retryKey="retry:"+row.id+":"+attempt;
+   try{
+    const claim=await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_scheduled',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING id",[row.lead_id,JSON.stringify({product:PRODUCT,attempt,failedEventId:row.id,scheduledAt:new Date().toISOString()}),owner,retryKey]);
+    if(!claim.rowCount)continue;
+    if(runMode!=="live"){items.push({leadId:row.lead_id,status:"retry-queued",attempt});continue;}
+    const body=String(m.body||"");
+    const html="<p>"+body.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</p>";
+    const sent=await sendEmail(String(row.email),String(m.subject||""),body,html,"sent:"+retryKey);
+    if(!sent.sent)throw new Error("provider-gated");
+    await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_sent',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({product:PRODUCT,channel:"email",provider:sent.provider,providerId:sent.id,subject:m.subject||"",fingerprint:m.fingerprint||"",retryAttempt:attempt,failedEventId:row.id}),owner,"sent:"+retryKey]);
+    await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_succeeded',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({attempt,failedEventId:row.id}),owner,"retry-success:"+retryKey]);
+    await db.query("UPDATE acquisition_leads SET last_contact_at=NOW(),status='executed' WHERE id=$1 AND owner_id=$2",[row.lead_id,owner]);
+    items.push({leadId:row.lead_id,status:"retry-succeeded",attempt});
+   }catch{
+    const exhausted=attempt>=3,delayHours=attempt===1?1:4;
+    await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_failed',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({product:PRODUCT,channel:"email",retryable:!exhausted,attempt,nextRetryAt:new Date(Date.now()+delayHours*60*60*1000).toISOString(),subject:m.subject||"",body:m.body||"",fingerprint:m.fingerprint||"",reason:"retry_failed"}),owner,"failed-retry:"+retryKey]);
+    if(exhausted)await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_exhausted',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({attempt,failedEventId:row.id}),owner,"retry-exhausted:"+retryKey]);
+    items.push({leadId:row.lead_id,status:exhausted?"retry-exhausted":"retry-failed",attempt});
+   }
+  }
+  return {status:"ok",recovered:items.filter(x=>x.status==="retry-succeeded").length,items};
+ }catch{try{await client.query("ROLLBACK")}catch{};return {status:"failed",recovered:0,items:[]};}finally{client.release();}
 }
 
 router.get("/status",requireAuth,async(_req,res)=>res.json({product:PRODUCT,mode:mode(),integrations:integrationStatus(),safety:{cooldownDays:COOLDOWN_DAYS,maxBatch:MAX_BATCH,realSendingRequiresConfiguredProvider:true}}));
@@ -87,7 +122,7 @@ router.post("/cron",async(req,res)=>{
  if(await githubOidcAuthorized(req)){
   const owners=(await initDb().query("SELECT DISTINCT owner_id FROM acquisition_leads WHERE owner_id IS NOT NULL LIMIT 100")).rows.map((r:any)=>String(r.owner_id));
   const results=[];
-  for(const owner of owners) results.push({owner,...(await runForOwner(owner,MAX_BATCH,mode(),"cron:"+new Date().toISOString().slice(0,13)))});
+  for(const owner of owners){const key="cron:"+new Date().toISOString().slice(0,13);const main=await runForOwner(owner,MAX_BATCH,mode(),key);const recovery=await recoverForOwner(owner,MAX_BATCH,mode());results.push({owner,...main,recovery});}
   return res.json({ok:true,product:PRODUCT,owners:owners.length,results,generatedAt:new Date().toISOString()});
  }
  const secret=text(req.get("X-Acquisition-Cron-Secret"),200);
