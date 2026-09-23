@@ -53,7 +53,7 @@ router.post("/cron",async(req,res)=>{
  if(!process.env.ACQUISITION_CRON_SECRET||secret!==process.env.ACQUISITION_CRON_SECRET)return res.status(401).json({error:"unauthorized"});
  const owners=(await initDb().query("SELECT DISTINCT owner_id FROM acquisition_leads WHERE owner_id IS NOT NULL")).rows.map((r:any)=>String(r.owner_id));
  const results=[];
- for(const owner of owners) results.push({owner,...await runForOwner(owner,MAX_BATCH,mode(),"cron:"+new Date().toISOString().slice(0,13)});
+ for(const owner of owners) results.push({owner,...(await runForOwner(owner,MAX_BATCH,mode(),"cron:"+new Date().toISOString().slice(0,13)))});
  res.json({ok:true,product:PRODUCT,owners:owners.length,results,generatedAt:new Date().toISOString()});
 });
 export default router;
