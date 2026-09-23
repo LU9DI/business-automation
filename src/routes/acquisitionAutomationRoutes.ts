@@ -34,9 +34,9 @@ async function runForOwner(owner:string,limit:number,runMode:string,requestedKey
     }else items.push({leadId:lead.id,status:"provider-gated"});
    }catch(error){
     const message=String(error||"");
-    const retryable=/(provider request failed: (429|5\\d\\d)|timeout|aborted|fetch failed|network)/i.test(message);
+    const retryable=/(provider request failed: (429|5\d\d)|timeout|aborted|fetch failed|network)/i.test(message);
     if(runMode==="live"){
-      await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_failed',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[lead.id,JSON.stringify({product:PRODUCT,channel:"email",retryable,error:retryable?"transient_provider_failure":"permanent_provider_failure",attempt:0,runId}),owner,"failed:"+lead.id+":"+runId]);
+      await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_failed',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[lead.id,JSON.stringify({product:PRODUCT,channel:"email",retryable,error:retryable?"transient_provider_failure":"permanent_provider_failure",attempt:0,runId,subject:draft.subject,body:draft.text,html:draft.html,fingerprint:fp}),owner,"failed:"+lead.id+":"+runId]);
     }
     items.push({leadId:lead.id,status:"failed",retryable});
    }
@@ -62,11 +62,11 @@ async function retryForOwner(owner:string,limit:number){
     await db.query("UPDATE acquisition_leads SET last_contact_at=NOW(),status='executed' WHERE id=$1 AND owner_id=$2",[row.lead_id,owner]); succeeded++; continue;
    }
   }catch(error){
-   const transient=/(provider request failed: (429|5\\d\\d)|timeout|aborted|fetch failed|network)/i.test(String(error||""));
+   const transient=/(provider request failed: (429|5\d\d)|timeout|aborted|fetch failed|network)/i.test(String(error||""));
    if(!transient){exhausted++; continue;}
   }
   if(attempt>=3){exhausted++; await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_exhausted',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({attempt,sourceEventId:row.id}),owner,"retry-exhausted:"+row.id+":"+attempt]);}
-  else {scheduled++; await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_scheduled',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({attempt,sourceEventId:row.id}),owner,"retry-scheduled:"+row.id+":"+attempt]);}
+  else {scheduled++; await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'retry_scheduled',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({attempt,sourceEventId:row.id}),owner,"retry-scheduled:"+row.id+":"+attempt]); await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_failed',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING",[row.lead_id,JSON.stringify({...meta,attempt}),owner,"failed:"+row.lead_id+":"+row.id+":"+attempt]);}
  }
  return {succeeded,scheduled,exhausted};
 }
