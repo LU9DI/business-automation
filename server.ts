@@ -1,5 +1,6 @@
 import acquisitionAutomationRoutes from "./src/routes/acquisitionAutomationRoutes.js";
 import authRoutes from "./src/routes/authRoutes.js";
+import platformRoutes from "./src/routes/platformRoutes.js";
 import workflowRoutes from "./src/routes/workflowRoutes.js";
 import webhookRoutes from "./src/routes/webhookRoutes.js";
 import express from "express";
@@ -40,6 +41,7 @@ app.use((_req, res, next) => {
 app.use(metricsMiddleware);
 
 app.use("/api/auth", authRoutes);
+app.use("/api/platform", platformRoutes);
 app.use("/api/workflows", workflowRoutes);
 app.use("/api/webhooks", webhookRoutes);
 
