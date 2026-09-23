@@ -117,13 +117,18 @@ router.post("/events",requireAuth,async(req,res)=>{
 
 router.get("/report",requireAuth,async(req,res)=>{
   try {
-     const db=initDb(), owner=userId(req);
-    const [leads,content,events]=await Promise.all([
+    const db=initDb(), owner=userId(req);
+    const rawWindow=Number(req.query.days??7), days=Number.isInteger(rawWindow)&&rawWindow>=1&&rawWindow<=90?rawWindow:7;
+    const since=new Date(Date.now()-days*86400000).toISOString();
+    const [leads,content,events,windowEvents,windowContent]=await Promise.all([
       db.query("SELECT status,count(*)::int count FROM acquisition_leads WHERE owner_id=$1 GROUP BY status",[owner]),
       db.query("SELECT channel,status,count(*)::int count FROM acquisition_content WHERE owner_id=$1 GROUP BY channel,status",[owner]),
-      db.query("SELECT type,count(*)::int count FROM acquisition_events WHERE owner_id=$1 GROUP BY type",[owner])
+      db.query("SELECT type,count(*)::int count FROM acquisition_events WHERE owner_id=$1 GROUP BY type",[owner]),
+      db.query("SELECT type,count(*)::int count FROM acquisition_events WHERE owner_id=$1 AND created_at >= $2 GROUP BY type ORDER BY count DESC",[owner,since]),
+      db.query("SELECT channel,status,count(*)::int count FROM acquisition_content WHERE owner_id=$1 AND created_at >= $2 GROUP BY channel,status ORDER BY channel,status",[owner,since])
     ]);
-    res.json({product:PRODUCT,leads:leads.rows,content:content.rows,events:events.rows,generatedAt:new Date().toISOString()});
+    const totals=Object.fromEntries(windowEvents.rows.map((r:any)=>[r.type,Number(r.count)]));
+    res.json({product:PRODUCT,window:{days,since,until:new Date().toISOString()},funnel:{automationRuns:totals.automation_run||0,queued:totals.outreach_queued||0,sent:totals.outreach_sent||0,failed:totals.outreach_failed||0,retries:totals.retry_scheduled||0,retrySucceeded:totals.retry_succeeded||0,bounces:totals.email_bounced||0,complaints:totals.email_complained||0,unsubscribes:totals.unsubscribe||0},leads:leads.rows,content:content.rows,events:events.rows,windowEvents:windowEvents.rows,windowContent:windowContent.rows,generatedAt:new Date().toISOString()});
   } catch { res.status(500).json({error:"failed to generate report"}); }
 });
 
