@@ -9,10 +9,12 @@ import { requireAuth } from "../middleware/auth.js";
 const router=Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_IDEMPOTENCY_KEY=200;
+const parseLimit=(v:unknown)=>{const n=Number(v??20);return Number.isInteger(n)&&n>=1&&n<=100?n:20;};
+const parseOffset=(v:unknown)=>{const n=Number(v??0);return Number.isInteger(n)&&n>=0&&n<=100000?n:0;};
 
 router.post("/",requireAuth,async(req,res)=>{try{const w=prepareWorkflow(req.body);const id=randomUUID();await initDb().query("INSERT INTO workflows (id,user_id,name,enabled,steps) VALUES ($1,$2,$3,$4,$5)",[id,(req as any).userId,w.name,w.enabled,JSON.stringify(w.steps)]);res.status(201).json({id,workflow:w});}catch{res.status(400).json({valid:false,error:"invalid workflow"});}});
 
-router.get("/",requireAuth,async(req,res)=>{try{const r=await initDb().query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100",[(req as any).userId]);res.json({workflows:r.rows});}catch{res.status(500).json({error:"failed to load workflows"});}});
+router.get("/",requireAuth,async(req,res)=>{try{const limit=parseLimit(req.query.limit),offset=parseOffset(req.query.offset);const db=initDb();const r=await db.query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3",[(req as any).userId,limit,offset]);const count=await db.query("SELECT COUNT(*)::int count FROM workflows WHERE user_id=$1",[(req as any).userId]);res.json({workflows:r.rows,pagination:{limit,offset,total:Number(count.rows[0].count),hasMore:offset+r.rows.length<Number(count.rows[0].count)}});}catch{res.status(500).json({error:"failed to load workflows"});}});
 
 router.get("/connectors",requireAuth,(_req,res)=>res.json({connectors:listConnectors()}));
 
@@ -61,6 +63,6 @@ router.post("/:id/run",requireAuth,async(req,res)=>{
   }
 });
 
-router.get("/runs",requireAuth,async(req,res)=>{try{const r=await initDb().query("SELECT id,workflow_id,status,input,output,error,started_at,finished_at,created_at FROM workflow_runs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100",[(req as any).userId]);res.json({runs:r.rows});}catch{res.status(500).json({error:"failed to load runs"});}});
+router.get("/runs",requireAuth,async(req,res)=>{try{const limit=parseLimit(req.query.limit),offset=parseOffset(req.query.offset),db=initDb();const r=await db.query("SELECT id,workflow_id,status,input,output,error,started_at,finished_at,created_at FROM workflow_runs WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",[(req as any).userId,limit,offset]);const count=await db.query("SELECT COUNT(*)::int count FROM workflow_runs WHERE user_id=$1",[(req as any).userId]);res.json({runs:r.rows,pagination:{limit,offset,total:Number(count.rows[0].count),hasMore:offset+r.rows.length<Number(count.rows[0].count)}});}catch{res.status(500).json({error:"failed to load runs"});}});
 
 export default router;
