@@ -12,6 +12,14 @@ router.post("/:workflowId",async(req,res)=>{let runId:string|undefined;try{const
  const idempotencyKey=(req.header("idempotency-key")||"").trim().slice(0,200)||undefined;
  if(idempotencyKey){const existing=await db.query("SELECT id,status,output,error FROM workflow_runs WHERE workflow_id=$1 AND idempotency_key=$2 LIMIT 1",[hook.rows[0].id,idempotencyKey]);if(existing.rowCount)return res.status(200).json({runId:existing.rows[0].id,status:existing.rows[0].status,output:existing.rows[0].output||undefined,error:existing.rows[0].error||undefined,duplicate:true});}
  runId=randomUUID();
- await db.query("INSERT INTO workflow_runs (id,workflow_id,user_id,status,input,started_at,idempotency_key) VALUES ($1,$2,$3,'running',$4,now(),$5)",[runId,hook.rows[0].id,hook.rows[0].user_id,JSON.stringify(req.body||{}),idempotencyKey||null]);
+ try {
+  await db.query("INSERT INTO workflow_runs (id,workflow_id,user_id,status,input,started_at,idempotency_key) VALUES ($1,$2,$3,'running',$4,now(),$5)",[runId,hook.rows[0].id,hook.rows[0].user_id,JSON.stringify(req.body||{}),idempotencyKey||null]);
+} catch (insertError) {
+  if (idempotencyKey && (insertError as any)?.code === "23505") {
+    const duplicate = await db.query("SELECT id,status,output,error FROM workflow_runs WHERE workflow_id=$1 AND idempotency_key=$2 LIMIT 1",[hook.rows[0].id,idempotencyKey]);
+    if (duplicate.rowCount) return res.status(200).json({runId:duplicate.rows[0].id,status:duplicate.rows[0].status,output:duplicate.rows[0].output||undefined,error:duplicate.rows[0].error||undefined,duplicate:true});
+  }
+  throw insertError;
+}
  const result=await executeWorkflow(w,req.body||{});await db.query("UPDATE workflow_runs SET status='succeeded',output=$1,finished_at=now() WHERE id=$2",[JSON.stringify(result.output),runId]);res.json({runId,status:"succeeded",output:result.output});
 }catch(e){if(runId)await initDb().query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",[e instanceof Error?e.message:"execution failed",runId]).catch(()=>{});res.status(400).json({error:e instanceof Error?e.message:"webhook execution failed",runId});}});export default router;
