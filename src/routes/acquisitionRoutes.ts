@@ -9,6 +9,8 @@ const SEO = [{"path":"/produto","title":"Business Automation — automação emp
 const STATUSES = new Set(["researched","selected","scheduled","executed","delivered","published","failed"]);
 const CHANNELS = new Set(["email","blog","x","pinterest","devto","hashnode","linkedin","telegram"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const parseLimit=(v:unknown)=>{const n=Number(v??20);return Number.isInteger(n)&&n>=1&&n<=100?n:20;};
+const parseOffset=(v:unknown)=>{const n=Number(v??0);return Number.isInteger(n)&&n>=0&&n<=100000?n:0;};
 
 function userId(req: any): string {
   return String(req.userId || "");
@@ -70,10 +72,7 @@ router.post("/leads",requireAuth,async(req,res)=>{
 });
 
 router.get("/leads",requireAuth,async(req,res)=>{
-  try {  const r=await initDb().query(
-    "SELECT id,email,name,company,source,country,language,score,status,last_contact_at,created_at FROM acquisition_leads WHERE owner_id=$1 ORDER BY created_at DESC LIMIT 100",[userId(req)]);
-    res.json({leads:r.rows});
-  } catch { res.status(500).json({error:"failed to list leads"}); }
+  try { const limit=parseLimit(req.query.limit),offset=parseOffset(req.query.offset),db=initDb(); const r=await db.query("SELECT id,email,name,company,source,country,language,score,status,last_contact_at,created_at FROM acquisition_leads WHERE owner_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",[userId(req),limit,offset]); const count=await db.query("SELECT COUNT(*)::int count FROM acquisition_leads WHERE owner_id=$1",[userId(req)]); res.json({leads:r.rows,pagination:{limit,offset,total:Number(count.rows[0].count),hasMore:offset+r.rows.length<Number(count.rows[0].count)}}); } catch { res.status(500).json({error:"failed to list leads"}); }
 });
 
 router.post("/content",requireAuth,async(req,res)=>{
@@ -95,10 +94,7 @@ router.post("/content",requireAuth,async(req,res)=>{
 });
 
 router.get("/content",requireAuth,async(req,res)=>{
-  try {  const r=await initDb().query(
-    "SELECT id,channel,title,slug,status,scheduled_at,published_at,utm_campaign,created_at FROM acquisition_content WHERE owner_id=$1 ORDER BY created_at DESC LIMIT 100",[userId(req)]);
-    res.json({content:r.rows});
-  } catch { res.status(500).json({error:"failed to list content"}); }
+  try { const limit=parseLimit(req.query.limit),offset=parseOffset(req.query.offset),db=initDb(); const r=await db.query("SELECT id,channel,title,slug,status,scheduled_at,published_at,utm_campaign,created_at FROM acquisition_content WHERE owner_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",[userId(req),limit,offset]); const count=await db.query("SELECT COUNT(*)::int count FROM acquisition_content WHERE owner_id=$1",[userId(req)]); res.json({content:r.rows,pagination:{limit,offset,total:Number(count.rows[0].count),hasMore:offset+r.rows.length<Number(count.rows[0].count)}}); } catch { res.status(500).json({error:"failed to list content"}); }
 });
 
 router.post("/events",requireAuth,async(req,res)=>{
