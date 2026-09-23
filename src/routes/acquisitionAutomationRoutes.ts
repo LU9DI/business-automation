@@ -48,12 +48,55 @@ router.post("/run",requireAuth,async(req:any,res)=>{
  res.status(result.status==="failed"?500:result.status==="busy"?409:200).json({ok:result.status!=="failed",product:PRODUCT,mode:mode(),...result});
 });
 
+const GITHUB_OIDC_ISSUER="https://token.actions.githubusercontent.com";
+const GITHUB_OIDC_AUDIENCE="filtra-acquisition";
+let oidcKeys:{expiresAt:number;keys:Record<string,any>}|null=null;
+function b64urlJson(value:string){return JSON.parse(Buffer.from(value.replace(/-/g,"+").replace(/_/g,"/")+"=".repeat((4-value.length%4)%4),"base64").toString("utf8"));}
+async function githubOidcAuthorized(req:any){
+ const header=text(req.get("Authorization"),500);
+ if(!header.startsWith("Bearer "))return false;
+ const token=header.slice(7).trim();
+ const parts=token.split(".");
+ if(parts.length!==3)return false;
+ let head:any,payload:any;
+ try{head=b64urlJson(parts[0]);payload=b64urlJson(parts[1]);}catch{return false;}
+ if(head.alg!=="RS256"||!head.kid||payload.iss!==GITHUB_OIDC_ISSUER)return false;
+ const now=Math.floor(Date.now()/1000);
+ if(typeof payload.exp!=="number"||payload.exp<now||typeof payload.nbf==="number"&&payload.nbf>now)return false;
+ const aud=Array.isArray(payload.aud)?payload.aud:[payload.aud];
+ if(!aud.includes(GITHUB_OIDC_AUDIENCE))return false;
+ if(payload.repository!=="LU9DI/business-automation"||payload.repository_owner!=="LU9DI"||payload.ref!=="refs/heads/main"||payload.event_name!=="schedule")return false;
+ try{
+  if(!oidcKeys||oidcKeys.expiresAt<now){
+   const r=await fetch(GITHUB_OIDC_ISSUER+"/.well-known/jwks",{redirect:"error",signal:AbortSignal.timeout(5000)});
+   if(!r.ok)return false;
+   const data:any=await r.json();
+   oidcKeys={expiresAt:now+3600,keys:Object.fromEntries((data.keys||[]).map((k:any)=>[k.kid,k]))};
+  }
+  const jwk=oidcKeys.keys[head.kid];
+  if(!jwk)return false;
+  const {createPublicKey,verify}=await import("node:crypto");
+  const key=createPublicKey({key:jwk,format:"jwk"});
+  const data=Buffer.from(parts[0]+"."+parts[1]);
+  const sig=Buffer.from(parts[2].replace(/-/g,"+").replace(/_/g,"/")+"=".repeat((4-parts[2].length%4)%4),"base64");
+  return verify("RSA-SHA256",data,key,sig);
+ }catch{return false;}
+}
+
 router.post("/cron",async(req,res)=>{
+ if(await githubOidcAuthorized(req)){
+  const owners=(await initDb().query("SELECT DISTINCT owner_id FROM acquisition_leads WHERE owner_id IS NOT NULL")).rows.map((r:any)=>String(r.owner_id));
+  const results=[];
+  for(const owner of owners) results.push({owner,...(await runForOwner(owner,MAX_BATCH,mode(),"cron:"+new Date().toISOString().slice(0,13)))});
+  return res.json({ok:true,product:PRODUCT,owners:owners.length,results,generatedAt:new Date().toISOString()});
+ }
  const secret=text(req.get("X-Acquisition-Cron-Secret"),200);
- if(!process.env.ACQUISITION_CRON_SECRET||secret!==process.env.ACQUISITION_CRON_SECRET)return res.status(401).json({error:"unauthorized"});
- const owners=(await initDb().query("SELECT DISTINCT owner_id FROM acquisition_leads WHERE owner_id IS NOT NULL")).rows.map((r:any)=>String(r.owner_id));
- const results=[];
- for(const owner of owners) results.push({owner,...(await runForOwner(owner,MAX_BATCH,mode(),"cron:"+new Date().toISOString().slice(0,13)))});
- res.json({ok:true,product:PRODUCT,owners:owners.length,results,generatedAt:new Date().toISOString()});
+ if(process.env.ACQUISITION_CRON_SECRET&&secret===process.env.ACQUISITION_CRON_SECRET){
+  const owners=(await initDb().query("SELECT DISTINCT owner_id FROM acquisition_leads WHERE owner_id IS NOT NULL")).rows.map((r:any)=>String(r.owner_id));
+  const results=[];
+  for(const owner of owners) results.push({owner,...(await runForOwner(owner,MAX_BATCH,mode(),"cron:"+new Date().toISOString().slice(0,13)))});
+  return res.json({ok:true,product:PRODUCT,owners:owners.length,results,generatedAt:new Date().toISOString()});
+ }
+ return res.status(401).json({error:"unauthorized"});
 });
 export default router;
