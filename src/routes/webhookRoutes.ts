@@ -22,4 +22,4 @@ router.post("/:workflowId",async(req,res)=>{let runId:string|undefined;try{const
   throw insertError;
 }
  const result=await executeWorkflow(w,req.body||{});await db.query("UPDATE workflow_runs SET status='succeeded',output=$1,finished_at=now() WHERE id=$2",[JSON.stringify(result.output),runId]);res.json({runId,status:"succeeded",output:result.output});
-}catch(e){if(runId)await initDb().query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",[e instanceof Error?e.message:"execution failed",runId]).catch(()=>{});res.status(400).json({error:e instanceof Error?e.message:"webhook execution failed",runId});}});export default router;
+}catch(e){if(runId)await initDb().query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",[e instanceof Error?e.message:"execution failed",runId]).catch(()=>{});res.status(400).json({error:"webhook execution failed",runId});}});export default router;
