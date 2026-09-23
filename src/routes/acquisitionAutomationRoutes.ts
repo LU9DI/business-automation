@@ -21,8 +21,9 @@ async function runForOwner(owner:string,limit:number,runMode:string,requestedKey
   const runId=(await client.query("INSERT INTO acquisition_events(id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),'automation_run',$1,$2,$3) RETURNING id",[JSON.stringify({product:PRODUCT,mode:runMode,requestedAt:new Date().toISOString(),limit}),owner,requestedKey])).rows[0].id;
   await client.query("COMMIT");
   for(const lead of leads.rows){
+   let draft:any=null,fp="";
    try{
-    const draft=await generateOutreach(lead),fp=fingerprint(lead,draft.text),key="outreach:"+lead.id+":"+fp;
+    draft=await generateOutreach(lead); fp=fingerprint(lead,draft.text); const key="outreach:"+lead.id+":"+fp;
     const claim=await db.query("INSERT INTO acquisition_events(id,lead_id,type,metadata,owner_id,idempotency_key) VALUES(gen_random_uuid(),$1,'outreach_queued',$2,$3,$4) ON CONFLICT(owner_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING id",[lead.id,JSON.stringify({product:PRODUCT,mode:runMode,channel:"email",email:lead.email,company:lead.company,name:lead.name,country:lead.country,language:lead.language,score:lead.score,subject:draft.subject,body:draft.text,provider:draft.provider,fingerprint:fp,runId}),owner,key]);
     if(!claim.rowCount)continue;
     if(runMode!=="live"){items.push({leadId:lead.id,status:"queued",provider:draft.provider});continue;}
