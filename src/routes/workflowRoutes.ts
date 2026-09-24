@@ -54,7 +54,7 @@ router.post("/:id/run",requireAuth,async(req,res)=>{
     if(!idempotencyKey||idempotencyKey.length>MAX_IDEMPOTENCY_KEY)return res.status(400).json({error:"invalid idempotency key"});
     const r=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2",[req.params.id,userId]);
     if(!r.rowCount)return res.status(404).json({error:"workflow not found"});
-    const workflow=prepareWorkflow(r.rows[0]);
+    let workflow=prepareWorkflow(r.rows[0]);
     const concurrent=await db.query("SELECT COUNT(*)::int count FROM workflow_runs WHERE user_id=$1 AND status IN ('running','queued')",[userId]);
     if(Number(concurrent.rows[0].count)>=MAX_CONCURRENT_RUNS)return res.status(429).json({error:"concurrency limit reached",limit:MAX_CONCURRENT_RUNS});
     const daily=await db.query("SELECT COUNT(*)::int count FROM workflow_runs WHERE user_id=$1 AND created_at >= now()-interval '24 hours'",[userId]);
@@ -78,8 +78,10 @@ router.post("/:id/run",requireAuth,async(req,res)=>{
       await db.query("COMMIT");
       inserted=true;
       r.rows[0]={...r.rows[0],...snapshot};
+      workflow=prepareWorkflow(snapshot);
     }catch(error:any){
-      if(error?.code!=="23505")throw error;
+      if(error?.code!=="23505"){await db.query("ROLLBACK").catch(()=>{});throw error;}
+      await db.query("ROLLBACK").catch(()=>{});
       const raced=await db.query("SELECT id,status,output FROM workflow_runs WHERE workflow_id=$1 AND user_id=$2 AND idempotency_key=$3",[req.params.id,userId,idempotencyKey]);
       if(!raced.rowCount)return res.status(409).json({error:"workflow run could not be established"});
       const row=raced.rows[0];
@@ -90,10 +92,10 @@ router.post("/:id/run",requireAuth,async(req,res)=>{
     await recordAttempt(runId,1,"running",undefined,(await db.query("SELECT workflow_version_id FROM workflow_runs WHERE id=$1",[runId])).rows[0]?.workflow_version_id);
     const result=await executeWorkflow(workflow,req.body||{});
     await db.query("UPDATE workflow_runs SET status='succeeded',output=$1,finished_at=now() WHERE id=$2",[redactedJson(result.output),runId]);
-    await recordAttempt(runId,1,"succeeded");
+    await recordAttempt(runId,1,"succeeded",undefined,(await db.query("SELECT workflow_version_id FROM workflow_runs WHERE id=$1",[runId])).rows[0]?.workflow_version_id);
     res.json({runId,...result});
   }catch{
-    if(inserted){await db.query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",["execution failed",runId]).catch(()=>{});await recordAttempt(runId,1,"failed","execution failed").catch(()=>{});}
+    if(inserted){const versionId=(await db.query("SELECT workflow_version_id FROM workflow_runs WHERE id=$1",[runId])).rows[0]?.workflow_version_id;await db.query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",["execution failed",runId]).catch(()=>{});await recordAttempt(runId,1,"failed","execution failed",versionId).catch(()=>{});}
     res.status(400).json({error:"workflow execution failed",runId:inserted?runId:undefined});
   }
 });
