@@ -40,5 +40,14 @@ INSERT INTO plan_entitlements(plan,feature,limit_value,enabled) VALUES
 ('pro','automations',100,true),
 ('business','core',NULL,true),
 ('business','advanced_analytics',NULL,true),
-('business','automations',1000,true)
-ON CONFLICT(plan,feature) DO NOTHING;
+('business','automations',1000,true),
+('free','watchlists',10,true),
+('pro','watchlists',100,true),
+('business','watchlists',1000,true),
+('free','agent_installs',10,true),
+('pro','agent_installs',100,true),
+('business','agent_installs',1000,true),
+('free','companies',3,true),
+('pro','companies',50,true),
+('business','companies',500,true)
+ON CONFLICT(plan,feature) DO UPDATE SET limit_value=EXCLUDED.limit_value,enabled=EXCLUDED.enabled;
