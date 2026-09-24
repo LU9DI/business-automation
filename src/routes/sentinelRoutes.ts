@@ -348,6 +348,61 @@ router.get("/imports",async(req,res)=>{
 const RULE_KINDS = ["degree_threshold","event_frequency","amount_threshold","temporal_burst","shared_attribute"] as const;
 const RULE_SEVERITIES = ["low","medium","high"] as const;
 
+
+
+router.get("/signals/summary",async(req,res)=>{
+ try{
+  const u=uid(req),db=await initDb();
+  const status=clean(req.query?.status,20);
+  const params:any[]=[u],where=["a.user_id=$1"];
+  if(status&&["open","reviewing","dismissed","confirmed"].includes(status)){params.push(status);where.push("a.status=$"+params.length)}
+  const r=await db.query(\`SELECT a.id,a.title,a.severity,a.status,a.alert_type,a.created_at,a.entity_ids,a.rationale,
+    COALESCE((a.rationale->>'ruleId'),'legacy') AS rule_id,
+    COALESCE((a.rationale->>'ruleVersion'),'1') AS rule_version
+    FROM sentinel_alerts a WHERE \${where.join(" AND ")} ORDER BY CASE a.severity WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,a.created_at DESC LIMIT 100\`,params);
+  res.json({signals:r.rows,algorithmVersion:"horus-signal-summary-v1",humanReviewRequired:true});
+ }catch{res.status(500).json({error:"failed to load signal summary"});}
+});
+
+router.post("/signals/:id/review",async(req,res)=>{
+ const id=clean(req.params.id,80),decision=clean(req.body?.decision,30),notes=clean(req.body?.notes,2000);
+ if(!["open","reviewing","dismissed","confirmed"].includes(decision))return res.status(400).json({error:"invalid review status"});
+ try{
+  const u=uid(req),db=await initDb();
+  const r=await db.query("UPDATE sentinel_alerts SET status=$1 WHERE id=$2 AND user_id=$3 RETURNING id,title,status,rationale,entity_ids",[decision,id,u]);
+  if(!r.rowCount)return res.status(404).json({error:"signal not found"});
+  await db.query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose,metadata) VALUES($1,$2,$2,'signal.reviewed','alert',$3,'human review of assistive signal',$4)",[randomUUID(),u,id,json({decision,notes,algorithmVersion:"horus-signal-review-v1",humanReviewRequired:true})]);
+  res.json({signal:r.rows[0],review:{decision,notes},algorithmVersion:"horus-signal-review-v1",humanReviewRequired:true});
+ }catch{res.status(500).json({error:"failed to review signal"});}
+});
+
+router.get("/cases/:id/correlation",async(req,res)=>{
+ try{
+  const u=uid(req),caseId=clean(req.params.id,80),db=await initDb();
+  const check=await db.query("SELECT id,title,status FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
+  if(!check.rowCount)return res.status(404).json({error:"case not found"});
+  const entities=(await db.query("SELECT entity_id FROM sentinel_case_entities WHERE case_id=$1",[caseId])).rows.map(x=>x.entity_id);
+  if(!entities.length)return res.json({case:check.rows[0],correlations:[],algorithmVersion:"horus-correlation-v1",humanReviewRequired:true});
+  const signals=await db.query(\`SELECT a.id,a.title,a.severity,a.status,a.created_at,a.entity_ids,a.rationale
+    FROM sentinel_alerts a WHERE a.user_id=$1 AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(a.entity_ids) x WHERE x=ANY($2::text[]))
+    ORDER BY a.created_at DESC LIMIT 100\`,[u,entities]);
+  const events=await db.query(\`SELECT ev.id,ev.event_type,ev.occurred_at,ev.entity_id,ev.amount,ev.currency,ev.source
+    FROM sentinel_events ev WHERE ev.user_id=$1 AND ev.entity_id=ANY($2::text[]) ORDER BY ev.occurred_at DESC LIMIT 200\`,[u,entities]);
+  const rel=await db.query(\`SELECT e.id,e.source_id,e.target_id,e.relation,e.weight
+    FROM sentinel_edges e WHERE e.user_id=$1 AND (e.source_id=ANY($2::text[]) OR e.target_id=ANY($2::text[])) ORDER BY e.weight DESC NULLS LAST LIMIT 200\`,[u,entities]);
+  const entitySet=new Set(entities),neighborIds=[...new Set(rel.rows.flatMap((x:any)=>[x.source_id,x.target_id]).filter((x:string)=>!entitySet.has(x)))];
+  const neighbors=neighborIds.length?await db.query("SELECT id,name,entity_type FROM sentinel_entities WHERE user_id=$1 AND id=ANY($2::text[])",[u,neighborIds]):{rows:[]};
+  const correlations=signals.rows.map((s:any)=>({
+   type:"signal",id:s.id,title:s.title,severity:s.severity,status:s.status,createdAt:s.created_at,
+   evidence:{entityIds:s.entity_ids,rationale:s.rationale}
+  }));
+  correlations.push(...rel.rows.map((x:any)=>({type:"relationship",id:x.id,sourceId:x.source_id,targetId:x.target_id,relation:x.relation,weight:x.weight})));
+  correlations.push(...events.rows.map((x:any)=>({type:"event",id:x.id,eventType:x.event_type,occurredAt:x.occurred_at,entityId:x.entity_id,amount:x.amount,currency:x.currency,source:x.source})));
+  await db.query("INSERT INTO sentinel_analysis_runs(id,user_id,case_id,analysis_type,algorithm_version,input_summary,result_summary,human_review_required) VALUES($1,$2,$3,'case_correlation','horus-correlation-v1',$4,$5,true)",[randomUUID(),u,caseId,json({entityCount:entities.length}),json({signals:signals.rowCount,events:events.rowCount,relationships:rel.rowCount,neighborEntities:neighbors.rowCount})]);
+  res.json({case:check.rows[0],caseEntityIds:entities,correlations,neighborEntities:neighbors.rows,counts:{signals:signals.rowCount,events:events.rowCount,relationships:rel.rowCount,neighborEntities:neighbors.rowCount},algorithmVersion:"horus-correlation-v1",humanReviewRequired:true,disclaimer:"Correlação contextual para revisão humana; não constitui prova ou conclusão sobre pessoas ou organizações."});
+ }catch{res.status(500).json({error:"failed to correlate case evidence"});}
+});
+
 router.get("/rules",async(req,res)=>{
  try{
   const r=await initDb().query("SELECT id,name,description,enabled,version,kind,severity,definition,created_at,updated_at FROM sentinel_rules WHERE user_id=$1 ORDER BY created_at DESC",[uid(req)]);
