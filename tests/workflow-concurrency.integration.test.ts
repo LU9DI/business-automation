@@ -179,10 +179,10 @@ test("workflow edit is not starved by a continuous stream of shared execution lo
     ]);
 
     stop = true;
+    await editor.query("ROLLBACK");
     await Promise.all(readerLoops);
 
     assert.ok(readerCaptures > 0, "the liveness test must exercise repeated execution locks");
-    await editor.query("ROLLBACK");
   } finally {
     stop = true;
     await seedReader.query("ROLLBACK").catch(() => {});
