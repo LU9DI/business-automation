@@ -343,6 +343,94 @@ router.get("/imports",async(req,res)=>{
  catch{res.status(500).json({error:"failed to load imports"});}
 });
 
+
+
+const RULE_KINDS = ["degree_threshold","event_frequency","amount_threshold","temporal_burst","shared_attribute"] as const;
+const RULE_SEVERITIES = ["low","medium","high"] as const;
+
+router.get("/rules",async(req,res)=>{
+ try{
+  const r=await initDb().query("SELECT id,name,description,enabled,version,kind,severity,definition,created_at,updated_at FROM sentinel_rules WHERE user_id=$1 ORDER BY created_at DESC",[uid(req)]);
+  res.json({rules:r.rows,algorithmVersion:"horus-rules-v1"});
+ }catch{res.status(500).json({error:"failed to load rules"});}
+});
+
+router.post("/rules",async(req,res)=>{
+ const name=clean(req.body?.name,120),description=clean(req.body?.description,500),kind=clean(req.body?.kind,60);
+ const severity=clean(req.body?.severity,20)||"medium",definition=req.body?.definition;
+ if(!name||!RULE_KINDS.includes(kind as any)||!RULE_SEVERITIES.includes(severity as any)||!definition||typeof definition!=="object"||Array.isArray(definition))
+  return res.status(400).json({error:"invalid rule definition"});
+ try{
+  const id=randomUUID(),u=uid(req);
+  await initDb().query("INSERT INTO sentinel_rules(id,user_id,name,description,enabled,version,kind,severity,definition) VALUES($1,$2,$3,$4,true,1,$5,$6,$7)",[id,u,name,description,kind,severity,json(definition)]);
+  await initDb().query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose,metadata) VALUES($1,$2,$2,'rule.created','rule',$3,'configure assistive screening',$4)",[randomUUID(),u,id,json({algorithmVersion:"horus-rules-v1",kind})]);
+  res.status(201).json({id,algorithmVersion:"horus-rules-v1"});
+ }catch{res.status(500).json({error:"failed to create rule"});}
+});
+
+router.patch("/rules/:id",async(req,res)=>{
+ const id=clean(req.params.id,80),u=uid(req);
+ const enabled=req.body?.enabled;
+ if(typeof enabled!=="boolean")return res.status(400).json({error:"enabled must be boolean"});
+ try{
+  const r=await initDb().query("UPDATE sentinel_rules SET enabled=$1,updated_at=now() WHERE id=$2 AND user_id=$3 RETURNING id,enabled,version",[enabled,id,u]);
+  if(!r.rowCount)return res.status(404).json({error:"rule not found"});
+  await initDb().query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose,metadata) VALUES($1,$2,$2,'rule.updated','rule',$3,'configure assistive screening',$4)",[randomUUID(),u,id,json({enabled})]);
+  res.json({rule:r.rows[0],algorithmVersion:"horus-rules-v1"});
+ }catch{res.status(500).json({error:"failed to update rule"});}
+});
+
+router.post("/rules/evaluate",async(req,res)=>{
+ const u=uid(req);
+ try{
+  const db=await initDb(),rules=(await db.query("SELECT id,name,description,version,kind,severity,definition FROM sentinel_rules WHERE user_id=$1 AND enabled=true ORDER BY created_at",[u])).rows;
+  let generated=0,candidates=0;
+  for(const rule of rules){
+   const def=rule.definition||{};
+   if(rule.kind==="degree_threshold"){
+    const threshold=Math.max(1,Math.min(100,Number(def.threshold)||5));
+    const q=await db.query("SELECT e.id,e.name,COUNT(ed.id)::int AS degree FROM sentinel_entities e LEFT JOIN sentinel_edges ed ON ed.user_id=e.user_id AND (ed.source_id=e.id OR ed.target_id=e.id) WHERE e.user_id=$1 GROUP BY e.id,e.name HAVING COUNT(ed.id)>=$2 ORDER BY degree DESC LIMIT 50",[u,threshold]);
+    candidates+=q.rowCount;
+    for(const row of q.rows){
+     const title=rule.name+": "+row.name;
+     const exists=await db.query("SELECT 1 FROM sentinel_alerts WHERE user_id=$1 AND title=$2 AND status IN ('open','reviewing') LIMIT 1",[u,title]);
+     if(!exists.rowCount){await db.query("INSERT INTO sentinel_alerts(id,user_id,alert_type,severity,status,title,summary,rationale,entity_ids) VALUES($1,$2,'rule_signal',$3,'open',$4,$5,$6,$7)",[randomUUID(),u,rule.severity,title,"Entity connected to "+row.degree+" relationship(s).",json({ruleId:rule.id,ruleVersion:rule.version,kind:rule.kind,threshold,evidence:{degree:row.degree},humanReviewRequired:true,algorithmVersion:"horus-rules-v1"}),json([row.id])]);generated++;}
+    }
+   } else if(rule.kind==="event_frequency"||rule.kind==="temporal_burst"){
+    const days=Math.max(1,Math.min(365,Number(def.windowDays)||30)),minimum=Math.max(2,Math.min(1000,Number(def.minimumEvents)||5));
+    const q=await db.query("SELECT e.id,e.name,COUNT(ev.id)::int AS event_count FROM sentinel_entities e JOIN sentinel_events ev ON ev.user_id=e.user_id AND ev.entity_id=e.id AND ev.occurred_at>=now()-make_interval(days=>$2) WHERE e.user_id=$1 GROUP BY e.id,e.name HAVING COUNT(ev.id)>=$3 ORDER BY event_count DESC LIMIT 50",[u,days,minimum]);
+    candidates+=q.rowCount;
+    for(const row of q.rows){
+     const title=rule.name+": "+row.name;
+     const exists=await db.query("SELECT 1 FROM sentinel_alerts WHERE user_id=$1 AND title=$2 AND status IN ('open','reviewing') LIMIT 1",[u,title]);
+     if(!exists.rowCount){await db.query("INSERT INTO sentinel_alerts(id,user_id,alert_type,severity,status,title,summary,rationale,entity_ids) VALUES($1,$2,'rule_signal',$3,'open',$4,$5,$6,$7)",[randomUUID(),u,rule.severity,title,"Entity recorded "+row.event_count+" event(s) in the configured window.",json({ruleId:rule.id,ruleVersion:rule.version,kind:rule.kind,windowDays:days,minimumEvents:minimum,evidence:{eventCount:row.event_count},humanReviewRequired:true,algorithmVersion:"horus-rules-v1"}),json([row.id])]);generated++;}
+    }
+   } else if(rule.kind==="amount_threshold"){
+    const minimum=Math.max(0,Number(def.minimumAmount)||100000);
+    const q=await db.query("SELECT e.id,e.name,ev.id AS event_id,ev.amount,ev.currency,ev.occurred_at FROM sentinel_events ev JOIN sentinel_entities e ON e.id=ev.entity_id AND e.user_id=ev.user_id WHERE ev.user_id=$1 AND ev.amount>=$2 ORDER BY ev.amount DESC LIMIT 50",[u,minimum]);
+    candidates+=q.rowCount;
+    for(const row of q.rows){
+     const title=rule.name+": "+row.name;
+     const exists=await db.query("SELECT 1 FROM sentinel_alerts WHERE user_id=$1 AND title=$2 AND status IN ('open','reviewing') LIMIT 1",[u,title]);
+     if(!exists.rowCount){await db.query("INSERT INTO sentinel_alerts(id,user_id,alert_type,severity,status,title,summary,rationale,entity_ids) VALUES($1,$2,'rule_signal',$3,'open',$4,$5,$6,$7)",[randomUUID(),u,rule.severity,title,"Event amount meets or exceeds the configured threshold.",json({ruleId:rule.id,ruleVersion:rule.version,kind:rule.kind,minimumAmount:minimum,evidence:{eventId:row.event_id,amount:row.amount,currency:row.currency,occurredAt:row.occurred_at},humanReviewRequired:true,algorithmVersion:"horus-rules-v1"}),json([row.id])]);generated++;}
+    }
+   } else if(rule.kind==="shared_attribute"){
+    const key=clean(def.metadataKey,80);
+    if(!key)continue;
+    const q=await db.query("SELECT metadata->>$2 AS value,COUNT(*)::int AS entity_count,ARRAY_AGG(id) AS entity_ids FROM sentinel_entities WHERE user_id=$1 AND NULLIF(metadata->>$2,'') IS NOT NULL GROUP BY metadata->>$2 HAVING COUNT(*)>=2 ORDER BY entity_count DESC LIMIT 50",[u,key]);
+    candidates+=q.rowCount;
+    for(const row of q.rows){
+     const title=rule.name+": "+row.value;
+     const exists=await db.query("SELECT 1 FROM sentinel_alerts WHERE user_id=$1 AND title=$2 AND status IN ('open','reviewing') LIMIT 1",[u,title]);
+     if(!exists){await db.query("INSERT INTO sentinel_alerts(id,user_id,alert_type,severity,status,title,summary,rationale,entity_ids) VALUES($1,$2,'rule_signal',$3,'open',$4,$5,$6,$7)",[randomUUID(),u,rule.severity,title,"Multiple entities share the configured metadata attribute.",json({ruleId:rule.id,ruleVersion:rule.version,kind:rule.kind,metadataKey:key,evidence:{value:row.value,entityCount:row.entity_count},humanReviewRequired:true,algorithmVersion:"horus-rules-v1"}),json(row.entity_ids||[])]);generated++;}
+    }
+   }
+  }
+  await db.query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,purpose,metadata) VALUES($1,$2,$2,'rules.evaluated','rule_engine','run assistive screening',$3)",[randomUUID(),u,json({ruleCount:rules.length,candidates,generated,algorithmVersion:"horus-rules-v1",humanReviewRequired:true})]);
+  res.json({rulesEvaluated:rules.length,candidates,generated,algorithmVersion:"horus-rules-v1",humanReviewRequired:true,disclaimer:"Regras produzem sinais para revisão humana; não constituem prova de irregularidade, crime ou responsabilidade."});
+ }catch(e){res.status(500).json({error:"failed to evaluate rules"});}
+});
+
 router.get("/scenarios",(_req,res)=>{
  res.json({scenarios:[
   {id:"procurement_network",name:"Rede de contratação",description:"Empresas, contrato, pessoas e contas sintéticas conectadas para explorar vínculos."},
