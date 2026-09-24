@@ -6,7 +6,7 @@ import { redactedJson } from "../services/redaction.js";
 import { initDb } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createWorkflowVersion, recordAttempt } from "../services/executionPolicy.js";
-import { enforceLimit, getEntitlement } from "../core/platformGovernance.js";
+import { audit, enforceLimit, getEntitlement } from "../core/platformGovernance.js";
 
 const router=Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
