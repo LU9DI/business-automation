@@ -112,6 +112,56 @@ router.get("/overview/events",async(req,res)=>{
  }catch{res.status(500).json({error:"failed to load event timeline"});}
 });
 
+router.get("/graph",async(req,res)=>{
+ try{
+  const u=uid(req),limit=Math.min(Math.max(Number(req.query.limit)||250,1),500),depth=Math.min(Math.max(Number(req.query.depth)||2,1),5);
+  const entities=await initDb().query("SELECT id,entity_type,name,external_ref,metadata FROM sentinel_entities WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2",[u,limit]);
+  const edges=await initDb().query("SELECT id,source_id,target_id,relation,weight,metadata FROM sentinel_edges WHERE user_id=$1 LIMIT 1000",[u]);
+  res.json({entities:entities.rows,relationships:edges.rows,depth,algorithmVersion:"horus-graph-v1"});
+ }catch{res.status(500).json({error:"failed to load graph"})}
+});
+
+router.get("/graph/path",async(req,res)=>{
+ const from=clean(req.query.from,80),to=clean(req.query.to,80);
+ if(!from||!to)return res.status(400).json({error:"from and to are required"});
+ try{
+  const u=uid(req);
+  const r=await initDb().query(`
+   WITH RECURSIVE walk(node_id, path, depth) AS (
+     SELECT $2::text, ARRAY[$2::text], 0
+     UNION ALL
+     SELECT CASE WHEN e.source_id=w.node_id THEN e.target_id ELSE e.source_id END,
+            w.path || CASE WHEN e.source_id=w.node_id THEN e.target_id ELSE e.source_id END,
+            w.depth+1
+     FROM walk w
+     JOIN sentinel_edges e ON e.user_id=$1 AND (e.source_id=w.node_id OR e.target_id=w.node_id)
+     WHERE w.depth < 5
+       AND NOT (CASE WHEN e.source_id=w.node_id THEN e.target_id ELSE e.source_id END = ANY(w.path))
+   )
+   SELECT path,depth FROM walk WHERE node_id=$3 ORDER BY depth LIMIT 1
+  `,[u,from,to]);
+  if(!r.rowCount)return res.status(404).json({error:"no path found within five hops"});
+  const ids=r.rows[0].path;
+  const nodes=await initDb().query("SELECT id,entity_type,name,external_ref FROM sentinel_entities WHERE user_id=$1 AND id=ANY($2::text[])",[u,ids]);
+  res.json({path:ids,nodes:nodes.rows,depth:r.rows[0].depth,algorithmVersion:"horus-path-v1",humanReviewRequired:true});
+ }catch{res.status(500).json({error:"graph path analysis failed"})}
+});
+
+router.get("/cases/:id",async(req,res)=>{
+ try{
+  const u=uid(req);
+  const c=await initDb().query("SELECT id,title,status,purpose,classification,created_at,updated_at FROM sentinel_cases WHERE id=$1 AND user_id=$2",[req.params.id,u]);
+  if(!c.rowCount)return res.status(404).json({error:"case not found"});
+  const [entities,alerts,runs,audit]=await Promise.all([
+   initDb().query("SELECT e.id,e.entity_type,e.name,e.external_ref,ce.role FROM sentinel_case_entities ce JOIN sentinel_entities e ON e.id=ce.entity_id AND e.user_id=$2 WHERE ce.case_id=$1",[req.params.id,u]),
+   initDb().query("SELECT id,alert_type,severity,status,title,summary,rationale,entity_ids,created_at FROM sentinel_alerts WHERE user_id=$1 AND entity_ids ?| ARRAY(SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2)",[u,req.params.id]),
+   initDb().query("SELECT id,analysis_type,algorithm_version,input_summary,result_summary,human_review_required,created_at FROM sentinel_analysis_runs WHERE user_id=$1 AND case_id=$2 ORDER BY created_at DESC",[u,req.params.id]),
+   initDb().query("SELECT id,action,resource_type,resource_id,purpose,metadata,created_at FROM sentinel_audit_log WHERE user_id=$1 AND resource_id=$2 ORDER BY created_at DESC LIMIT 100",[u,req.params.id])
+  ]);
+  res.json({case:c.rows[0],entities:entities.rows,alerts:alerts.rows,runs:runs.rows,audit:audit.rows});
+ }catch{res.status(500).json({error:"failed to load case workspace"})}
+});
+
 router.post("/analyst",async(req,res)=>{
  const question=clean(req.body?.question,600);
  if(!question)return res.status(400).json({error:"question is required"});
@@ -125,7 +175,7 @@ router.post("/analyst",async(req,res)=>{
   ]);
   const top=e.rows.map(x=>x.name+" ("+x.entity_type+", "+x.degree+" vínculos)");
   const answer="A análise estruturada encontrou "+o.rows[0].count+" entidades, "+v.rows[0].count+" eventos e "+a.rows[0].count+" alertas abertos/revisando. A pergunta foi interpretada como análise exploratória; nenhuma inferência de culpa ou crime foi produzida.";
-  res.json({answer,evidence:["Pergunta: "+question,"Entidades mais conectadas: "+(top.join("; ")||"nenhuma"),"Valor agregado de eventos: "+String(v.rows[0].total)],algorithmVersion:"sentinel-analyst-v1",humanReviewRequired:true});
+  const evidence=["Pergunta: "+question,"Entidades mais conectadas: "+(top.join("; ")||"nenhuma"),"Valor agregado de eventos: "+String(v.rows[0].total)]; const runId=randomUUID(); await initDb().query("INSERT INTO sentinel_analysis_runs(id,user_id,analysis_type,algorithm_version,input_summary,result_summary) VALUES($1,$2,$3,$4,$5,$6)",[runId,u,"analyst","horus-analyst-v2",json({question}),json({evidence,humanReviewRequired:true})]); await initDb().query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[randomUUID(),u,u,"analyst.query","analysis_run",runId,"structured intelligence analysis",json({algorithmVersion:"horus-analyst-v2",question})]); res.json({answer,evidence,runId,algorithmVersion:"horus-analyst-v2",humanReviewRequired:true});
  }catch{res.status(500).json({error:"analyst failed"});}
 });
 
