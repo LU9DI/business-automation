@@ -85,7 +85,7 @@ test("workflow execution waits for an edit and captures the committed version", 
     await editor.query("BEGIN");
     await lockWorkflowExclusive(editor, workflowId);
     await editor.query(
-      "SELECT id FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE",
+      "SELECT id FROM workflows WHERE id=$1 AND user_id=$2",
       [workflowId, userId],
     );
     await editor.query(
