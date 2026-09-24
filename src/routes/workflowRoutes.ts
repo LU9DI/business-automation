@@ -6,6 +6,7 @@ import { redactedJson } from "../services/redaction.js";
 import { initDb } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createWorkflowVersion, recordAttempt } from "../services/executionPolicy.js";
+import { enforceLimit } from "../core/platformGovernance.js";
 
 const router=Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -16,7 +17,7 @@ const MAX_CONCURRENT_RUNS=3;
 const parseLimit=(v:unknown)=>{const n=Number(v??20);return Number.isInteger(n)&&n>=1&&n<=100?n:20;};
 const parseOffset=(v:unknown)=>{const n=Number(v??0);return Number.isInteger(n)&&n>=0&&n<=100000?n:0;};
 
-router.post("/",requireAuth,async(req,res)=>{try{const w=prepareWorkflow(req.body);const db=initDb();const count=await db.query("SELECT COUNT(*)::int count FROM workflows WHERE user_id=$1",[(req as any).userId]);if(Number(count.rows[0].count)>=MAX_WORKFLOWS_PER_USER)return res.status(429).json({error:"workflow limit reached",limit:MAX_WORKFLOWS_PER_USER});const id=randomUUID();await db.query("INSERT INTO workflows (id,user_id,name,enabled,steps) VALUES ($1,$2,$3,$4,$5)",[id,(req as any).userId,w.name,w.enabled,JSON.stringify(w.steps)]);res.status(201).json({id,workflow:w});}catch{res.status(400).json({valid:false,error:"invalid workflow"});}});
+router.post("/",requireAuth,async(req,res)=>{try{const w=prepareWorkflow(req.body);const db=initDb();const count=await db.query("SELECT COUNT(*)::int count FROM workflows WHERE user_id=$1",[(req as any).userId]);try{await enforceLimit((req as any).userId,"automations",Number(count.rows[0].count));}catch(e){return res.status(429).json({error:"workflow plan limit reached",limit:(await import("../core/platformGovernance.js")).getEntitlement?undefined:MAX_WORKFLOWS_PER_USER});}const id=randomUUID();await db.query("INSERT INTO workflows (id,user_id,name,enabled,steps) VALUES ($1,$2,$3,$4,$5)",[id,(req as any).userId,w.name,w.enabled,JSON.stringify(w.steps)]);res.status(201).json({id,workflow:w});}catch{res.status(400).json({valid:false,error:"invalid workflow"});}});
 
 router.get("/",requireAuth,async(req,res)=>{try{const limit=parseLimit(req.query.limit),offset=parseOffset(req.query.offset);const db=initDb();const r=await db.query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3",[(req as any).userId,limit,offset]);const count=await db.query("SELECT COUNT(*)::int count FROM workflows WHERE user_id=$1",[(req as any).userId]);res.json({workflows:r.rows,pagination:{limit,offset,total:Number(count.rows[0].count),hasMore:offset+r.rows.length<Number(count.rows[0].count)}});}catch{res.status(500).json({error:"failed to load workflows"});}});
 
