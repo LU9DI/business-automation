@@ -8,7 +8,8 @@
     "start": "tsx scripts/migrate.ts && tsx server.ts",
     "build": "tsc --noEmit",
     "check": "tsc --noEmit",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "tsx --test tests/**/*.test.ts",
+    "migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
