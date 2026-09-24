@@ -16,6 +16,13 @@ export async function getEntitlement(userId: string, feature: string): Promise<E
   return { allowed: row.enabled !== false, limit: row.limit_value == null ? null : Number(row.limit_value), plan: row.plan };
 }
 
+export async function enforceLimit(userId: string, feature: string, current: number): Promise<Entitlement> {
+  const entitlement = await getEntitlement(userId, feature);
+  if (!entitlement.allowed) throw new Error(`feature disabled: ${feature}`);
+  if (entitlement.limit !== null && current >= entitlement.limit) throw new Error(`limit reached: ${feature}`);
+  return entitlement;
+}
+
 export async function audit(
   userId: string | null,
   action: string,
