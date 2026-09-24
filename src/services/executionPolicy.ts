@@ -34,11 +34,13 @@ export async function ensureWorkflowVersion(workflowId:string,userId:string,clie
  // entering a tuple MultiXact that can repeatedly overtake the exclusive waiter.
  const db=client??initDb();
  await lockWorkflowShared(db,workflowId);
- const own=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2 FOR SHARE",[workflowId,userId]);
+ const own=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2",[workflowId,userId]);
  if(!own.rowCount) return null;
  const latest=await db.query("SELECT id,version,definition FROM workflow_versions WHERE workflow_id=$1 ORDER BY version DESC LIMIT 1",[workflowId]);
  if(latest.rowCount) return latest.rows[0];
  const id=randomUUID();
- await db.query("INSERT INTO workflow_versions(id,workflow_id,version,definition,created_by) VALUES($1,$2,1,$3,$4)",[id,workflowId,JSON.stringify(own.rows[0]),userId]);
- return {id,version:1,definition:own.rows[0]};
+ const inserted=await db.query("INSERT INTO workflow_versions(id,workflow_id,version,definition,created_by) VALUES($1,$2,1,$3,$4) ON CONFLICT (workflow_id,version) DO NOTHING RETURNING id,version,definition",[id,workflowId,JSON.stringify(own.rows[0]),userId]);
+ if(inserted.rowCount) return inserted.rows[0];
+ const repaired=await db.query("SELECT id,version,definition FROM workflow_versions WHERE workflow_id=$1 ORDER BY version DESC LIMIT 1",[workflowId]);
+ return repaired.rowCount ? repaired.rows[0] : null;
 }
