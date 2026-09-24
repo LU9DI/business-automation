@@ -10,19 +10,18 @@ const secrets = () =>
 
 export function requireJwtSecret() {
   const s = secrets()[0];
-  if (!s) throw new Error("JWT_SECRET is required");
+  if (!s || s.length < 32) throw new Error("JWT_SECRET must be at least 32 characters");
   return s;
 }
 
 export function signAccessToken(payload: AuthPayload) {
-  return jwt.sign(payload, requireJwtSecret(), {
-    expiresIn: 86400,
-  });
+  return jwt.sign(payload, requireJwtSecret(), { expiresIn: 604800 });
 }
 
 export function verifyAccessToken(token: string) {
   let last: unknown;
   for (const s of secrets()) {
+    if (s.length < 32) continue;
     try {
       return jwt.verify(token, s) as jwt.JwtPayload & AuthPayload;
     } catch (e) {
