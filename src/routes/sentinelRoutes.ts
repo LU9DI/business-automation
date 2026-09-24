@@ -2,12 +2,13 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { initDb, withTransaction } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { ENTITY_TYPES, RULE_KINDS, RULE_SEVERITIES, cleanText, finiteNumber } from "../domain/sentinelValidation.js";
 
 const router = Router();
 router.use(requireAuth);
 const uid=(req:any)=>String(req.userId);
 const json=(v:unknown)=>JSON.stringify(v??{});
-const clean=(v:unknown,max=180)=>String(v??"").trim().slice(0,max);
+
 
 router.get("/overview",async(req,res)=>{
  try{const u=uid(req);const [e,r,v,a,t]=await Promise.all([
@@ -22,7 +23,7 @@ router.get("/overview",async(req,res)=>{
 
 router.get("/search",async(req,res)=>{
  try{
-  const u=uid(req),q=clean(req.query.q,120),type=clean(req.query.type,30),limit=Math.min(Math.max(Number(req.query.limit)||30,1),50);
+  const u=uid(req),q=cleanText(req.query.q,120),type=cleanText(req.query.type,30),limit=Math.min(Math.max(Number(req.query.limit)||30,1),50);
   if(q.length<2)return res.json({results:[]});
   const like="%"+q.replace(/[%_]/g,"\\  const like="%"+q.replace(/[%_]/g,"\\const like="%"+q.replace(/[%_]/g,"\\router.get("/entities/:id/evidence",async(req,res)=>{")+"%";")+"%";")+"%";
   const p:any[]=[u,like],filters=type&&["entity","case","alert"].includes(type)?type:"";
@@ -45,7 +46,7 @@ router.get("/search",async(req,res)=>{
 
 router.get("/entities/:id/evidence",async(req,res)=>{
  try{
-  const u=uid(req),id=clean(req.params.id,80);
+  const u=uid(req),id=cleanText(req.params.id,80);
   const e=await initDb().query("SELECT id,entity_type,name,external_ref,metadata,created_at,updated_at FROM sentinel_entities WHERE id=$1 AND user_id=$2",[id,u]);
   if(!e.rowCount)return res.status(404).json({error:"entity not found"});
   const [relationships,events,alerts]=await Promise.all([
@@ -60,21 +61,21 @@ router.get("/entities/:id/evidence",async(req,res)=>{
 router.get("/entities",async(req,res)=>{try{const l=Math.min(Math.max(Number(req.query.limit)||100,1),100);const r=await initDb().query("SELECT id,entity_type,name,external_ref,metadata,created_at,updated_at FROM sentinel_entities WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2",[uid(req),l]);res.json({entities:r.rows})}catch{res.status(500).json({error:"failed to load entities"})}});
 
 router.post("/entities",async(req,res)=>{
- const b=req.body||{},n=clean(b.name),t=clean(b.entityType),ok=["person","company","account","contract","asset","address","vehicle","case","organization"];
+ const b=req.body||{},n=cleanText(b.name),t=cleanText(b.entityType),ok=ENTITY_TYPES;
  if(!n||!ok.includes(t))return res.status(400).json({error:"name and valid entityType are required"});
- try{const id=randomUUID();await initDb().query("INSERT INTO sentinel_entities(id,user_id,entity_type,name,external_ref,metadata) VALUES($1,$2,$3,$4,$5,$6)",[id,uid(req),t,n,clean(b.externalRef,120)||null,json(b.metadata)]);res.status(201).json({entity:{id,name:n,entity_type:t}})}catch{res.status(500).json({error:"failed to create entity"})}
+ try{const id=randomUUID();await initDb().query("INSERT INTO sentinel_entities(id,user_id,entity_type,name,external_ref,metadata) VALUES($1,$2,$3,$4,$5,$6)",[id,uid(req),t,n,cleanText(b.externalRef,120)||null,json(b.metadata)]);res.status(201).json({entity:{id,name:n,entity_type:t}})}catch{res.status(500).json({error:"failed to create entity"})}
 });
 
 router.post("/relationships",async(req,res)=>{
- const b=req.body||{},s=clean(b.sourceId,80),t=clean(b.targetId,80),rel=clean(b.relation,100);
+ const b=req.body||{},s=cleanText(b.sourceId,80),t=cleanText(b.targetId,80),rel=cleanText(b.relation,100);
  if(!s||!t||!rel||s===t)return res.status(400).json({error:"sourceId, targetId and relation are required"});
- try{const r=await initDb().query("INSERT INTO sentinel_edges(id,user_id,source_id,target_id,relation,weight,metadata) SELECT $1,$2,$3,$4,$5,$6,$7 WHERE EXISTS(SELECT 1 FROM sentinel_entities WHERE id=$3 AND user_id=$2) AND EXISTS(SELECT 1 FROM sentinel_entities WHERE id=$4 AND user_id=$2) ON CONFLICT(user_id,source_id,target_id,relation) DO UPDATE SET weight=sentinel_edges.weight+EXCLUDED.weight,metadata=EXCLUDED.metadata RETURNING id,source_id,target_id,relation,weight",[randomUUID(),uid(req),s,t,rel,Number(b.weight)||1,json(b.metadata)]);if(!r.rowCount)return res.status(404).json({error:"entities not found in your workspace"});res.status(201).json({relationship:r.rows[0]})}catch{res.status(500).json({error:"failed to create relationship"})}
+ try{const r=await initDb().query("INSERT INTO sentinel_edges(id,user_id,source_id,target_id,relation,weight,metadata) SELECT $1,$2,$3,$4,$5,$6,$7 WHERE EXISTS(SELECT 1 FROM sentinel_entities WHERE id=$3 AND user_id=$2) AND EXISTS(SELECT 1 FROM sentinel_entities WHERE id=$4 AND user_id=$2) ON CONFLICT(user_id,source_id,target_id,relation) DO UPDATE SET weight=sentinel_edges.weight+EXCLUDED.weight,metadata=EXCLUDED.metadata RETURNING id,source_id,target_id,relation,weight",[randomUUID(),uid(req),s,t,rel,finiteNumber(b.weight)??1,json(b.metadata)]);if(!r.rowCount)return res.status(404).json({error:"entities not found in your workspace"});res.status(201).json({relationship:r.rows[0]})}catch{res.status(500).json({error:"failed to create relationship"})}
 });
 
 router.post("/events",async(req,res)=>{
- const b=req.body||{},type=clean(b.eventType,80),occurred=String(b.occurredAt||"");
+ const b=req.body||{},type=cleanText(b.eventType,80),occurred=String(b.occurredAt||"");
  if(!type||!occurred||Number.isNaN(Date.parse(occurred)))return res.status(400).json({error:"eventType and valid occurredAt are required"});
- try{const id=randomUUID(),entity=b.entityId?clean(b.entityId,80):null;const r=await initDb().query("INSERT INTO sentinel_events(id,user_id,event_type,occurred_at,entity_id,amount,currency,source,metadata) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 WHERE $5 IS NULL OR EXISTS(SELECT 1 FROM sentinel_entities WHERE id=$5 AND user_id=$2) RETURNING id,event_type,occurred_at,entity_id,amount,currency,source",[id,uid(req),type,occurred,entity,b.amount==null?null:Number(b.amount),clean(b.currency,10)||null,clean(b.source,60)||"manual",json(b.metadata)]);if(!r.rowCount)return res.status(404).json({error:"entity not found in your workspace"});res.status(201).json({event:r.rows[0]})}catch{res.status(500).json({error:"failed to create event"})}
+ try{const id=randomUUID(),entity=b.entityId?cleanText(b.entityId,80):null;const r=await initDb().query("INSERT INTO sentinel_events(id,user_id,event_type,occurred_at,entity_id,amount,currency,source,metadata) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 WHERE $5 IS NULL OR EXISTS(SELECT 1 FROM sentinel_entities WHERE id=$5 AND user_id=$2) RETURNING id,event_type,occurred_at,entity_id,amount,currency,source",[id,uid(req),type,occurred,entity,finiteNumber(b.amount),cleanText(b.currency,10)||null,cleanText(b.source,60)||"manual",json(b.metadata)]);if(!r.rowCount)return res.status(404).json({error:"entity not found in your workspace"});res.status(201).json({event:r.rows[0]})}catch{res.status(500).json({error:"failed to create event"})}
 });
 
 router.post("/demo-data",async(req,res)=>{
@@ -85,12 +86,12 @@ router.post("/analyze",async(req,res)=>{
  try{const u=uid(req),alerts:any[]=[];const d=await initDb().query("SELECT e.id,e.name,e.entity_type,COUNT(se.id)::int degree FROM sentinel_entities e JOIN sentinel_edges se ON se.user_id=e.user_id AND(se.source_id=e.id OR se.target_id=e.id) WHERE e.user_id=$1 GROUP BY e.id HAVING COUNT(se.id)>=4 ORDER BY degree DESC LIMIT 20",[u]);for(const x of d.rows)alerts.push({type:"dense_relationships",severity:x.degree>=7?"high":"medium",title:"Nó com alta conectividade",summary:"A entidade possui muitas relações no grafo e merece revisão contextual.",rationale:{degree:x.degree,method:"degree_threshold",humanReviewRequired:true},entityIds:[x.id]});const f=await initDb().query("SELECT entity_id,COUNT(*)::int event_count,COALESCE(SUM(amount),0)::numeric total FROM sentinel_events WHERE user_id=$1 AND entity_id IS NOT NULL AND occurred_at>=now()-interval '30 days' GROUP BY entity_id HAVING COUNT(*)>=5 ORDER BY event_count DESC LIMIT 20",[u]);for(const x of f.rows)alerts.push({type:"repeated_activity",severity:+x.event_count>=10?"high":"medium",title:"Atividade repetida concentrada",summary:"Foram observados múltiplos eventos associados à mesma entidade no período analisado.",rationale:{eventCount:+x.event_count,total:String(x.total),window:"30d",method:"frequency_threshold",humanReviewRequired:true},entityIds:[x.entity_id]});let inserted=0;for(const a of alerts){const q=await initDb().query("SELECT 1 FROM sentinel_alerts WHERE user_id=$1 AND alert_type=$2 AND status IN('open','reviewing') AND entity_ids @> $3::jsonb LIMIT 1",[u,a.type,json(a.entityIds)]);if(!q.rowCount){await initDb().query("INSERT INTO sentinel_alerts(id,user_id,alert_type,severity,title,summary,rationale,entity_ids) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[randomUUID(),u,a.type,a.severity,a.title,a.summary,json(a.rationale),json(a.entityIds)]);inserted++}}res.json({generated:inserted,candidates:alerts.length,disclaimer:"Alertas são sinais para análise humana; não constituem prova de crime, lavagem de dinheiro ou irregularidade."})}catch{res.status(500).json({error:"analysis failed"})}
 });
 
-router.get("/alerts",async(req,res)=>{try{const status=clean(req.query.status,20),p:any[]=[uid(req)];let sql="SELECT id,alert_type,severity,status,title,summary,rationale,entity_ids,created_at,updated_at FROM sentinel_alerts WHERE user_id=$1";if(status){sql+=" AND status=$2";p.push(status)}sql+=" ORDER BY created_at DESC LIMIT 100";const r=await initDb().query(sql,p);res.json({alerts:r.rows})}catch{res.status(500).json({error:"failed to load alerts"})}});
+router.get("/alerts",async(req,res)=>{try{const status=cleanText(req.query.status,20),p:any[]=[uid(req)];let sql="SELECT id,alert_type,severity,status,title,summary,rationale,entity_ids,created_at,updated_at FROM sentinel_alerts WHERE user_id=$1";if(status){sql+=" AND status=$2";p.push(status)}sql+=" ORDER BY created_at DESC LIMIT 100";const r=await initDb().query(sql,p);res.json({alerts:r.rows})}catch{res.status(500).json({error:"failed to load alerts"})}});
 
-router.patch("/alerts/:id",async(req,res)=>{const status=clean(req.body?.status,20);if(!["open","reviewing","dismissed","confirmed"].includes(status))return res.status(400).json({error:"invalid status"});try{const r=await initDb().query("UPDATE sentinel_alerts SET status=$1,updated_at=now() WHERE id=$2 AND user_id=$3 RETURNING id,status,updated_at",[status,req.params.id,uid(req)]);if(!r.rowCount)return res.status(404).json({error:"alert not found"});res.json({alert:r.rows[0]})}catch{res.status(500).json({error:"failed to update alert"})}});
+router.patch("/alerts/:id",async(req,res)=>{const status=cleanText(req.body?.status,20);if(!["open","reviewing","dismissed","confirmed"].includes(status))return res.status(400).json({error:"invalid status"});try{const r=await initDb().query("UPDATE sentinel_alerts SET status=$1,updated_at=now() WHERE id=$2 AND user_id=$3 RETURNING id,status,updated_at",[status,req.params.id,uid(req)]);if(!r.rowCount)return res.status(404).json({error:"alert not found"});res.json({alert:r.rows[0]})}catch{res.status(500).json({error:"failed to update alert"})}});
 
 router.post("/cases", async (req,res)=>{
-  const title=clean(req.body?.title,180), purpose=clean(req.body?.purpose,500);
+  const title=cleanText(req.body?.title,180), purpose=cleanText(req.body?.purpose,500);
   if(!title||!purpose)return res.status(400).json({error:"title and purpose are required"});
   try{
     const id=randomUUID(),u=uid(req);
@@ -106,7 +107,7 @@ router.get("/cases",async(req,res)=>{
 });
 
 router.post("/cases/:id/entities",async(req,res)=>{
-  const entityId=clean(req.body?.entityId,80),role=clean(req.body?.role,80)||"subject_of_analysis";
+  const entityId=cleanText(req.body?.entityId,80),role=cleanText(req.body?.role,80)||"subject_of_analysis";
   if(!entityId)return res.status(400).json({error:"entityId is required"});
   try{
     const u=uid(req);
@@ -122,7 +123,7 @@ router.post("/cases/:id/entities",async(req,res)=>{
 });
 
 router.post("/analysis/run",async(req,res)=>{
-  const caseId=req.body?.caseId?clean(req.body.caseId,80):null;
+  const caseId=req.body?.caseId?cleanText(req.body.caseId,80):null;
   try{
     const u=uid(req);
     if(caseId){const c=await initDb().query("SELECT 1 FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);if(!c.rowCount)return res.status(404).json({error:"case not found"});}
@@ -172,7 +173,7 @@ router.get("/graph",async(req,res)=>{
 });
 
 router.get("/graph/path",async(req,res)=>{
- const from=clean(req.query.from,80),to=clean(req.query.to,80);
+ const from=cleanText(req.query.from,80),to=cleanText(req.query.to,80);
  if(!from||!to)return res.status(400).json({error:"from and to are required"});
  try{
   const u=uid(req);
@@ -199,7 +200,7 @@ router.get("/graph/path",async(req,res)=>{
 
 router.get("/cases/:id/graph",async(req,res)=>{
  try{
-  const u=uid(req),caseId=clean(req.params.id,80);
+  const u=uid(req),caseId=cleanText(req.params.id,80);
   const depth=Math.min(Math.max(Number(req.query.depth)||1,1),3);
   const limit=Math.min(Math.max(Number(req.query.limit)||250,1),500);
   const c0=await initDb().query("SELECT 1 FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
@@ -226,9 +227,9 @@ router.get("/cases/:id/graph",async(req,res)=>{
 
 router.get("/cases/:id/timeline",async(req,res)=>{
  try{
-  const u=uid(req),caseId=clean(req.params.id,80);
+  const u=uid(req),caseId=cleanText(req.params.id,80);
   const from=req.query.from?String(req.query.from):null,to=req.query.to?String(req.query.to):null;
-  const eventType=clean(req.query.eventType,80),entityId=clean(req.query.entityId,80);
+  const eventType=cleanText(req.query.eventType,80),entityId=cleanText(req.query.entityId,80);
   const limit=Math.min(Math.max(Number(req.query.limit)||200,1),200);
   const c0=await initDb().query("SELECT 1 FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
   if(!c0.rowCount)return res.status(404).json({error:"case not found"});
@@ -261,7 +262,7 @@ router.get("/cases/:id",async(req,res)=>{
 
 router.get("/cases/:id/evidence",async(req,res)=>{
  try{
-  const u=uid(req),caseId=clean(req.params.id,80);
+  const u=uid(req),caseId=cleanText(req.params.id,80);
   const c=await initDb().query("SELECT id,title,status,purpose,classification,created_at,updated_at FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
   if(!c.rowCount)return res.status(404).json({error:"case not found"});
   const [entities,events,edges,alerts,runs,audit]=await Promise.all([
@@ -279,7 +280,7 @@ router.get("/cases/:id/evidence",async(req,res)=>{
 });
 
 router.post("/analyst",async(req,res)=>{
- const question=clean(req.body?.question,600);
+ const question=cleanText(req.body?.question,600);
  if(!question)return res.status(400).json({error:"question is required"});
  try{
   const u=uid(req);
@@ -296,8 +297,8 @@ router.post("/analyst",async(req,res)=>{
 });
 
 router.post("/import",async(req,res)=>{
- const sourceName=clean(req.body?.sourceName,180)||"synthetic-upload";
- const format=clean(req.body?.format,10);
+ const sourceName=cleanText(req.body?.sourceName,180)||"synthetic-upload";
+ const format=cleanText(req.body?.format,10);
  const raw=String(req.body?.data||"");
  if(!["json","csv"].includes(format)||!raw)return res.status(400).json({error:"sourceName, format and data are required"});
  if(Buffer.byteLength(raw,"utf8")>1_000_000)return res.status(413).json({error:"synthetic import payload exceeds 1MB"});
@@ -320,16 +321,16 @@ router.post("/import",async(req,res)=>{
     row.push(cell.trim());if(row.some(Boolean))rows.push(row);return rows;
    };
    const rows=parseCsv(raw);
-   if(rows.length){const headers=rows[0].map(x=>clean(x,80));if(!headers.length||headers.some(h=>!h))throw new Error("invalid csv header");records=rows.slice(1,202).map(vals=>Object.fromEntries(headers.map((h,i)=>[h,vals[i]??""])));}
+   if(rows.length){const headers=rows[0].map(x=>cleanText(x,80));if(!headers.length||headers.some(h=>!h))throw new Error("invalid csv header");records=rows.slice(1,202).map(vals=>Object.fromEntries(headers.map((h,i)=>[h,vals[i]??""])));}
   }
   if(!Array.isArray(records)||records.length>200)return res.status(413).json({error:"synthetic import limit is 200 records"});
   const id=randomUUID();let accepted=0;
   await withTransaction(async c=>{
    for(const r of records){
     if(!r||typeof r!=="object"||Array.isArray(r))continue;
-    const name=clean((r as any).name||(r as any).entity_name,180),type=clean((r as any).entity_type||(r as any).entityType,40);
+    const name=cleanText((r as any).name||(r as any).entity_name,180),type=cleanText((r as any).entity_type||(r as any).entityType,40);
     if(name&&["person","company","account","contract","asset","address","vehicle","case","organization"].includes(type)){
-      await c.query("INSERT INTO sentinel_entities(id,user_id,entity_type,name,external_ref,metadata) VALUES($1,$2,$3,$4,$5,$6)",[randomUUID(),u,type,name,clean((r as any).external_ref||(r as any).externalRef,120)||null,json({synthetic:true})]);accepted++;
+      await c.query("INSERT INTO sentinel_entities(id,user_id,entity_type,name,external_ref,metadata) VALUES($1,$2,$3,$4,$5,$6)",[randomUUID(),u,type,name,cleanText((r as any).external_ref||(r as any).externalRef,120)||null,json({synthetic:true})]);accepted++;
     }
    }
    await c.query("INSERT INTO sentinel_imports(id,user_id,source_name,format,synthetic,row_count,status,metadata) VALUES($1,$2,$3,$4,true,$5,$6,$7)",[id,u,sourceName,format,records.length,accepted===records.length?"completed":accepted?"partial":"rejected",json({parser:"horus-import-v2",accepted})]);
@@ -345,15 +346,11 @@ router.get("/imports",async(req,res)=>{
 
 
 
-const RULE_KINDS = ["degree_threshold","event_frequency","amount_threshold","temporal_burst","shared_attribute"] as const;
-const RULE_SEVERITIES = ["low","medium","high"] as const;
-
-
 
 router.get("/signals/summary",async(req,res)=>{
  try{
   const u=uid(req),db=await initDb();
-  const status=clean(req.query?.status,20);
+  const status=cleanText(req.query?.status,20);
   const params:any[]=[u],where=["a.user_id=$1"];
   if(status&&["open","reviewing","dismissed","confirmed"].includes(status)){params.push(status);where.push("a.status=$"+params.length)}
   const r=await db.query(\`SELECT a.id,a.title,a.severity,a.status,a.alert_type,a.created_at,a.entity_ids,a.rationale,
@@ -365,7 +362,7 @@ router.get("/signals/summary",async(req,res)=>{
 });
 
 router.post("/signals/:id/review",async(req,res)=>{
- const id=clean(req.params.id,80),decision=clean(req.body?.decision,30),notes=clean(req.body?.notes,2000);
+ const id=cleanText(req.params.id,80),decision=cleanText(req.body?.decision,30),notes=cleanText(req.body?.notes,2000);
  if(!["open","reviewing","dismissed","confirmed"].includes(decision))return res.status(400).json({error:"invalid review status"});
  try{
   const u=uid(req),db=await initDb();
@@ -378,7 +375,7 @@ router.post("/signals/:id/review",async(req,res)=>{
 
 router.get("/cases/:id/correlation",async(req,res)=>{
  try{
-  const u=uid(req),caseId=clean(req.params.id,80),windowHours=Math.min(Math.max(Number(req.query.windowHours)||48,1),720),limit=Math.min(Math.max(Number(req.query.limit)||100,1),100),db=await initDb();
+  const u=uid(req),caseId=cleanText(req.params.id,80),windowHours=Math.min(Math.max(Number(req.query.windowHours)||48,1),720),limit=Math.min(Math.max(Number(req.query.limit)||100,1),100),db=await initDb();
   const check=await db.query("SELECT id,title,status,purpose,classification FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
   if(!check.rowCount)return res.status(404).json({error:"case not found"});
   const entities=(await db.query("SELECT entity_id FROM sentinel_case_entities WHERE case_id=$1",[caseId])).rows.map(x=>x.entity_id);
@@ -432,8 +429,8 @@ router.get("/rules",async(req,res)=>{
 });
 
 router.post("/rules",async(req,res)=>{
- const name=clean(req.body?.name,120),description=clean(req.body?.description,500),kind=clean(req.body?.kind,60);
- const severity=clean(req.body?.severity,20)||"medium",definition=req.body?.definition;
+ const name=cleanText(req.body?.name,120),description=cleanText(req.body?.description,500),kind=cleanText(req.body?.kind,60);
+ const severity=cleanText(req.body?.severity,20)||"medium",definition=req.body?.definition;
  if(!name||!RULE_KINDS.includes(kind as any)||!RULE_SEVERITIES.includes(severity as any)||!definition||typeof definition!=="object"||Array.isArray(definition))
   return res.status(400).json({error:"invalid rule definition"});
  try{
@@ -445,7 +442,7 @@ router.post("/rules",async(req,res)=>{
 });
 
 router.patch("/rules/:id",async(req,res)=>{
- const id=clean(req.params.id,80),u=uid(req);
+ const id=cleanText(req.params.id,80),u=uid(req);
  const enabled=req.body?.enabled;
  if(typeof enabled!=="boolean")return res.status(400).json({error:"enabled must be boolean"});
  try{
@@ -491,7 +488,7 @@ router.post("/rules/evaluate",async(req,res)=>{
      if(!exists.rowCount){await db.query("INSERT INTO sentinel_alerts(id,user_id,alert_type,severity,status,title,summary,rationale,entity_ids) VALUES($1,$2,'rule_signal',$3,'open',$4,$5,$6,$7)",[randomUUID(),u,rule.severity,title,"Event amount meets or exceeds the configured threshold.",json({ruleId:rule.id,ruleVersion:rule.version,kind:rule.kind,minimumAmount:minimum,evidence:{eventId:row.event_id,amount:row.amount,currency:row.currency,occurredAt:row.occurred_at},humanReviewRequired:true,algorithmVersion:"horus-rules-v1"}),json([row.id])]);generated++;}
     }
    } else if(rule.kind==="shared_attribute"){
-    const key=clean(def.metadataKey,80);
+    const key=cleanText(def.metadataKey,80);
     if(!key)continue;
     const q=await db.query("SELECT metadata->>$2 AS value,COUNT(*)::int AS entity_count,ARRAY_AGG(id) AS entity_ids FROM sentinel_entities WHERE user_id=$1 AND NULLIF(metadata->>$2,'') IS NOT NULL GROUP BY metadata->>$2 HAVING COUNT(*)>=2 ORDER BY entity_count DESC LIMIT 50",[u,key]);
     candidates+=q.rowCount;
@@ -516,7 +513,7 @@ router.get("/scenarios",(_req,res)=>{
 });
 
 router.post("/scenarios/:id/run",async(req,res)=>{
- const id=clean(req.params.id,60);
+ const id=cleanText(req.params.id,60);
  if(!["procurement_network","layered_transfers","repeated_contracting"].includes(id))return res.status(404).json({error:"scenario not found"});
  try{
   const u=uid(req);
