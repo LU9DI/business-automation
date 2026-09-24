@@ -24,7 +24,7 @@ router.get("/search",async(req,res)=>{
  try{
   const u=uid(req),q=clean(req.query.q,120),type=clean(req.query.type,30),limit=Math.min(Math.max(Number(req.query.limit)||30,1),50);
   if(q.length<2)return res.json({results:[]});
-  const like="%"+q.replace(/[%_]/g,"\\const like="%"+q.replace(/[%_]/g,"\\router.get("/entities/:id/evidence",async(req,res)=>{")+"%";")+"%";
+  const like="%"+q.replace(/[%_]/g,"\\  const like="%"+q.replace(/[%_]/g,"\\const like="%"+q.replace(/[%_]/g,"\\router.get("/entities/:id/evidence",async(req,res)=>{")+"%";")+"%";")+"%";
   const p:any[]=[u,like],filters=type&&["entity","case","alert"].includes(type)?type:"";
   const out:any[]=[];
   if(!filters||filters==="entity"){
@@ -385,7 +385,7 @@ router.get("/cases/:id/correlation",async(req,res)=>{
   if(!entities.length)return res.json({case:check.rows[0],caseEntityIds:[],correlations:[],windowHours,counts:{signals:0,events:0,relationships:0,temporal:0,intersections:0},algorithmVersion:"horus-correlation-v2",humanReviewRequired:true});
   const [signals,events,rel]=await Promise.all([
    db.query("SELECT a.id,a.title,a.severity,a.status,a.created_at,a.entity_ids,a.rationale FROM sentinel_alerts a WHERE a.user_id=$1 AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(a.entity_ids) x WHERE x=ANY($2::text[])) ORDER BY a.created_at DESC LIMIT 100",[u,entities]),
-   db.query("SELECT ev.id,ev.event_type,ev.occurred_at,ev.entity_id,ev.amount,ev.currency,ev.source FROM sentinel_events ev WHERE ev.user_id=$1 AND ev.entity_id=ANY($2::text[]) AND ev.occurred_at>=now()-make_interval(hours=>$3) ORDER BY ev.occurred_at DESC LIMIT 300",[u,entities,windowHours]),
+   db.query("SELECT ev.id,ev.event_type,ev.occurred_at,ev.entity_id,ev.amount,ev.currency,ev.source FROM sentinel_events ev WHERE ev.user_id=$1 AND ev.entity_id=ANY($2::text[]) AND ev.occurred_at>=now()-($3 * interval '1 hour') ORDER BY ev.occurred_at DESC LIMIT 300",[u,entities,windowHours]),
    db.query("SELECT e.id,e.source_id,e.target_id,e.relation,e.weight FROM sentinel_edges e WHERE e.user_id=$1 AND (e.source_id=ANY($2::text[]) OR e.target_id=ANY($2::text[])) ORDER BY e.weight DESC NULLS LAST LIMIT 200",[u,entities])
   ]);
   const correlations:any[]=[];
@@ -474,7 +474,7 @@ router.post("/rules/evaluate",async(req,res)=>{
     }
    } else if(rule.kind==="event_frequency"||rule.kind==="temporal_burst"){
     const days=Math.max(1,Math.min(365,Number(def.windowDays)||30)),minimum=Math.max(2,Math.min(1000,Number(def.minimumEvents)||5));
-    const q=await db.query("SELECT e.id,e.name,COUNT(ev.id)::int AS event_count FROM sentinel_entities e JOIN sentinel_events ev ON ev.user_id=e.user_id AND ev.entity_id=e.id AND ev.occurred_at>=now()-make_interval(days=>$2) WHERE e.user_id=$1 GROUP BY e.id,e.name HAVING COUNT(ev.id)>=$3 ORDER BY event_count DESC LIMIT 50",[u,days,minimum]);
+    const q=await db.query("SELECT e.id,e.name,COUNT(ev.id)::int AS event_count FROM sentinel_entities e JOIN sentinel_events ev ON ev.user_id=e.user_id AND ev.entity_id=e.id AND ev.occurred_at>=now()-($2 * interval '1 day') WHERE e.user_id=$1 GROUP BY e.id,e.name HAVING COUNT(ev.id)>=$3 ORDER BY event_count DESC LIMIT 50",[u,days,minimum]);
     candidates+=q.rowCount;
     for(const row of q.rows){
      const title=rule.name+": "+row.name;
