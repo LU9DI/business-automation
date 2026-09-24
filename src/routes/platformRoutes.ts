@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import { randomUUID } from "node:crypto";
 import { initDb } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { getEntitlement } from "../core/platformGovernance.js";
 
 const router = Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -24,6 +25,25 @@ export async function notifyUser(userId:string,title:string,body:string,type="sy
     );
   } catch {}
 }
+
+router.get("/entitlements",requireAuth,async(req,res)=>{
+  try {
+    const features=["core","advanced_analytics","automations"];
+    const entitlements=Object.fromEntries(await Promise.all(features.map(async(feature)=>[feature,await getEntitlement((req as any).userId,feature)])));
+    res.json({entitlements});
+  } catch { res.status(500).json({error:"failed to load entitlements"}); }
+});
+
+router.get("/audit",requireAuth,async(req,res)=>{
+  try {
+    const limit=Math.min(Math.max(Number(req.query.limit)||50,1),100);
+    const r=await initDb().query(
+      "SELECT id,action,entity_type,entity_id,request_id,metadata,created_at FROM audit_log WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2",
+      [(req as any).userId,limit]
+    );
+    res.json({audit:r.rows});
+  } catch { res.status(500).json({error:"failed to load audit log"}); }
+});
 
 router.get("/me",requireAuth,async(req,res)=>{
   try {
