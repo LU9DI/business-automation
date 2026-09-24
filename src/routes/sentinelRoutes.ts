@@ -20,6 +20,20 @@ router.get("/overview",async(req,res)=>{
  catch{res.status(500).json({error:"failed to load intelligence overview"})}
 });
 
+router.get("/entities/:id/evidence",async(req,res)=>{
+ try{
+  const u=uid(req),id=clean(req.params.id,80);
+  const e=await initDb().query("SELECT id,entity_type,name,external_ref,metadata,created_at,updated_at FROM sentinel_entities WHERE id=$1 AND user_id=$2",[id,u]);
+  if(!e.rowCount)return res.status(404).json({error:"entity not found"});
+  const [relationships,events,alerts]=await Promise.all([
+   initDb().query("SELECT r.id,r.source_id,r.target_id,r.relation,r.weight,r.metadata,CASE WHEN r.source_id=$2 THEN t.name ELSE s.name END AS other_name,CASE WHEN r.source_id=$2 THEN r.target_id ELSE r.source_id END AS other_id FROM sentinel_edges r JOIN sentinel_entities s ON s.id=r.source_id AND s.user_id=r.user_id JOIN sentinel_entities t ON t.id=r.target_id AND t.user_id=r.user_id WHERE r.user_id=$1 AND (r.source_id=$2 OR r.target_id=$2) ORDER BY r.weight DESC NULLS LAST LIMIT 100",[u,id]),
+   initDb().query("SELECT ev.id,ev.event_type,ev.occurred_at,ev.amount,ev.currency,ev.source,ev.metadata FROM sentinel_events ev WHERE ev.user_id=$1 AND ev.entity_id=$2 ORDER BY ev.occurred_at DESC LIMIT 100",[u,id]),
+   initDb().query("SELECT id,alert_type,severity,status,title,summary,rationale,created_at FROM sentinel_alerts WHERE user_id=$1 AND entity_ids @> $2::jsonb ORDER BY created_at DESC LIMIT 50",[u,json([id])])
+  ]);
+  res.json({entity:e.rows[0],relationships:relationships.rows,events:events.rows,alerts:alerts.rows,algorithmVersion:"horus-entity-evidence-v1",humanReviewRequired:true});
+ }catch{res.status(500).json({error:"failed to load entity evidence"})}
+});
+
 router.get("/entities",async(req,res)=>{try{const l=Math.min(Math.max(Number(req.query.limit)||100,1),100);const r=await initDb().query("SELECT id,entity_type,name,external_ref,metadata,created_at,updated_at FROM sentinel_entities WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2",[uid(req),l]);res.json({entities:r.rows})}catch{res.status(500).json({error:"failed to load entities"})}});
 
 router.post("/entities",async(req,res)=>{
