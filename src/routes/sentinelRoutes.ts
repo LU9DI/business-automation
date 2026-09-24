@@ -89,10 +89,23 @@ router.post("/analysis/run",async(req,res)=>{
   try{
     const u=uid(req);
     if(caseId){const c=await initDb().query("SELECT 1 FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);if(!c.rowCount)return res.status(404).json({error:"case not found"});}
-    const entities=await initDb().query("SELECT COUNT(*)::int count FROM sentinel_entities WHERE user_id=$1",[u]);
-    const events=await initDb().query("SELECT COUNT(*)::int count FROM sentinel_events WHERE user_id=$1",[u]);
+    let summary:any;
+    if(caseId){
+      const [entities,events,relationships]=await Promise.all([
+        initDb().query("SELECT COUNT(*)::int count FROM sentinel_case_entities WHERE case_id=$1",[caseId]),
+        initDb().query("SELECT COUNT(*)::int count FROM sentinel_events ev WHERE ev.user_id=$1 AND ev.entity_id IN (SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2)",[u,caseId]),
+        initDb().query("SELECT COUNT(*)::int count FROM sentinel_edges e WHERE e.user_id=$1 AND (e.source_id IN (SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2) OR e.target_id IN (SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2))",[u,caseId])
+      ]);
+      summary={entities:Number(entities.rows[0].count),events:Number(events.rows[0].count),relationships:Number(relationships.rows[0].count),caseScoped:true,mode:"rule_based_screening",humanReviewRequired:true};
+    }else{
+      const [entities,events,relationships]=await Promise.all([
+        initDb().query("SELECT COUNT(*)::int count FROM sentinel_entities WHERE user_id=$1",[u]),
+        initDb().query("SELECT COUNT(*)::int count FROM sentinel_events WHERE user_id=$1",[u]),
+        initDb().query("SELECT COUNT(*)::int count FROM sentinel_edges WHERE user_id=$1",[u])
+      ]);
+      summary={entities:Number(entities.rows[0].count),events:Number(events.rows[0].count),relationships:Number(relationships.rows[0].count),caseScoped:false,mode:"rule_based_screening",humanReviewRequired:true};
+    }
     const id=randomUUID();
-    const summary={entities:Number(entities.rows[0].count),events:Number(events.rows[0].count),mode:"rule_based_screening",humanReviewRequired:true};
     await initDb().query("INSERT INTO sentinel_analysis_runs(id,user_id,case_id,analysis_type,algorithm_version,input_summary,result_summary) VALUES($1,$2,$3,$4,$5,$6,$7)",[id,u,caseId,"screening","sentinel-rules-v1",json(summary),json(summary)]);
     await initDb().query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[randomUUID(),u,u,"analysis.run","analysis_run",id,"authorized investigative screening",json({caseId,algorithmVersion:"sentinel-rules-v1"})]);
     res.status(201).json({run:{id,...summary},disclaimer:"Screening is assistive only. It does not establish criminal conduct, money laundering, guilt or liability."});
@@ -160,6 +173,25 @@ router.get("/cases/:id",async(req,res)=>{
   ]);
   res.json({case:c.rows[0],entities:entities.rows,alerts:alerts.rows,runs:runs.rows,audit:audit.rows});
  }catch{res.status(500).json({error:"failed to load case workspace"})}
+});
+
+router.get("/cases/:id/evidence",async(req,res)=>{
+ try{
+  const u=uid(req),caseId=clean(req.params.id,80);
+  const c=await initDb().query("SELECT id,title,status,purpose,classification,created_at,updated_at FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
+  if(!c.rowCount)return res.status(404).json({error:"case not found"});
+  const [entities,events,edges,alerts,runs,audit]=await Promise.all([
+   initDb().query("SELECT e.id,e.entity_type,e.name,e.external_ref,ce.role FROM sentinel_case_entities ce JOIN sentinel_entities e ON e.id=ce.entity_id AND e.user_id=$2 WHERE ce.case_id=$1 ORDER BY e.name LIMIT 100",[caseId,u]),
+   initDb().query("SELECT ev.id,ev.event_type,ev.occurred_at,ev.entity_id,ev.amount,ev.currency,ev.source,e.name AS entity_name FROM sentinel_events ev LEFT JOIN sentinel_entities e ON e.id=ev.entity_id AND e.user_id=ev.user_id WHERE ev.user_id=$1 AND ev.entity_id IN (SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2) ORDER BY ev.occurred_at DESC LIMIT 200",[u,caseId]),
+   initDb().query("SELECT id,source_id,target_id,relation,weight,metadata FROM sentinel_edges WHERE user_id=$1 AND (source_id IN (SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2) OR target_id IN (SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2)) LIMIT 500",[u,caseId]),
+   initDb().query("SELECT id,alert_type,severity,status,title,summary,rationale,entity_ids,created_at FROM sentinel_alerts WHERE user_id=$1 AND entity_ids ?| ARRAY(SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2) ORDER BY created_at DESC LIMIT 100",[u,caseId]),
+   initDb().query("SELECT id,analysis_type,algorithm_version,input_summary,result_summary,human_review_required,created_at FROM sentinel_analysis_runs WHERE user_id=$1 AND case_id=$2 ORDER BY created_at DESC LIMIT 100",[u,caseId]),
+   initDb().query("SELECT id,actor_id,action,resource_type,resource_id,purpose,metadata,created_at FROM sentinel_audit_log WHERE user_id=$1 AND (resource_id=$2 OR (metadata->>'caseId')=$2) ORDER BY created_at DESC LIMIT 200",[u,caseId])
+  ]);
+  const ids=entities.rows.map((x:any)=>x.id);
+  const neighbors=await initDb().query("SELECT id,entity_type,name,external_ref,metadata FROM sentinel_entities WHERE user_id=$1 AND id IN (SELECT source_id FROM sentinel_edges WHERE user_id=$1 AND target_id=ANY($2::text[]) UNION SELECT target_id FROM sentinel_edges WHERE user_id=$1 AND source_id=ANY($2::text[])) LIMIT 200",[u,ids]);
+  res.json({case:c.rows[0],entities:entities.rows,neighbors:neighbors.rows,relationships:edges.rows,events:events.rows,alerts:alerts.rows,runs:runs.rows,audit:audit.rows,algorithmVersion:"horus-evidence-v1",humanReviewRequired:true});
+ }catch{res.status(500).json({error:"failed to load case evidence"})}
 });
 
 router.post("/analyst",async(req,res)=>{
