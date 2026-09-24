@@ -6,10 +6,18 @@ import { requireAuth } from "../middleware/auth.js";
 import { getEntitlement } from "../core/platformGovernance.js";
 
 const router = Router();
-import { ensureSubscription, changePlan, startTrial } from "../services/billingService.js";
+import { ensureSubscription, changePlan, startTrial, cancelAtPeriodEnd, resumeSubscription } from "../services/billingService.js";
 router.get("/billing",requireAuth,async(req,res)=>{try{res.json({subscription:await ensureSubscription((req as any).userId)});}catch{res.status(500).json({error:"failed to load billing"});}});
 router.post("/billing/trial",requireAuth,async(req,res)=>{try{res.json({subscription:await startTrial((req as any).userId,Number(req.body?.days)||7)});}catch{res.status(500).json({error:"failed to start trial"});}});
 router.post("/billing/plan",requireAuth,async(req,res)=>{try{const plan=String(req.body?.plan||"free");if(!["free","pro","business"].includes(plan))return res.status(400).json({error:"invalid plan"});res.json(await changePlan((req as any).userId,plan as any,"self_service"));}catch{res.status(500).json({error:"failed to change plan"});}});
+router.post("/billing/cancel",requireAuth,async(req,res)=>{
+ try{res.json({subscription:await cancelAtPeriodEnd((req as any).userId)});}
+ catch(error:any){res.status(error?.message==="active subscription not found"?404:500).json({error:error?.message==="active subscription not found"?"active subscription not found":"failed to schedule cancellation"});}
+});
+router.post("/billing/resume",requireAuth,async(req,res)=>{
+ try{res.json({subscription:await resumeSubscription((req as any).userId)});}
+ catch(error:any){res.status(error?.message==="active subscription not found"?404:500).json({error:error?.message==="active subscription not found"?"active subscription not found":"failed to resume subscription"});}
+});
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
