@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   clampInt,
   cleanText,
+  escapeLike,
   finiteNumber,
   ENTITY_TYPES,
   RULE_KINDS,
@@ -17,6 +18,10 @@ test("clampInt rejects non-finite values and clamps ranges", () => {
   assert.equal(clampInt("10.9", 2, 1, 5), 5);
   assert.equal(clampInt("not-a-number", 2, 1, 5), 2);
   assert.equal(clampInt(-10, 2, 1, 5), 1);
+});
+
+test("escapeLike protects SQL LIKE wildcards", () => {
+  assert.equal(escapeLike("100%_\\\\"), "100\\%\\_\\\\");
 });
 
 test("finiteNumber accepts finite numeric input only", () => {
