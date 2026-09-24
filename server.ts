@@ -168,8 +168,12 @@ app.get("/api/metrics", (req, res) => {
 });
 
 app.use(errorHandler);
-const server = app.listen(port, () => console.log("business-automation API listening on " + port));
-let shuttingDown = false;
-const shutdown = () => { if (shuttingDown) return; shuttingDown = true; server.close(async () => { try { await closeDb(); } finally { process.exit(0); } }); };
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+export { app };
+
+if (process.env.RUN_HTTP_INTEGRATION !== "1") {
+  const server = app.listen(port, () => console.log("business-automation API listening on " + port));
+  let shuttingDown = false;
+  const shutdown = () => { if (shuttingDown) return; shuttingDown = true; server.close(async () => { try { await closeDb(); } finally { process.exit(0); } }); };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}
