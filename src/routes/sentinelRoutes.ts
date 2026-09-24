@@ -20,6 +20,29 @@ router.get("/overview",async(req,res)=>{
  catch{res.status(500).json({error:"failed to load intelligence overview"})}
 });
 
+router.get("/search",async(req,res)=>{
+ try{
+  const u=uid(req),q=clean(req.query.q,120),type=clean(req.query.type,30),limit=Math.min(Math.max(Number(req.query.limit)||30,1),50);
+  if(q.length<2)return res.json({results:[]});
+  const like="%"+q.replace(/[%_]/g,"\\router.get("/entities/:id/evidence",async(req,res)=>{")+"%";
+  const p:any[]=[u,like],filters=type&&["entity","case","alert"].includes(type)?type:"";
+  const out:any[]=[];
+  if(!filters||filters==="entity"){
+   const r=await initDb().query("SELECT id,'entity' result_type,entity_type type,name,title_ref,external_ref,updated_at FROM (SELECT id,entity_type,name,external_ref,updated_at,external_ref AS title_ref FROM sentinel_entities WHERE user_id=$1 AND (name ILIKE $2 OR COALESCE(external_ref,'') ILIKE $2)) q ORDER BY updated_at DESC LIMIT $3",[u,like,limit]);
+   out.push(...r.rows);
+  }
+  if(!filters||filters==="case"){
+   const r=await initDb().query("SELECT id,'case' result_type,status type,title,NULL::text external_ref,updated_at FROM sentinel_cases WHERE user_id=$1 AND (title ILIKE $2 OR purpose ILIKE $2) ORDER BY updated_at DESC LIMIT $3",[u,like,limit]);
+   out.push(...r.rows);
+  }
+  if(!filters||filters==="alert"){
+   const r=await initDb().query("SELECT id,'alert' result_type,severity type,title,NULL::text external_ref,updated_at FROM sentinel_alerts WHERE user_id=$1 AND (title ILIKE $2 OR summary ILIKE $2) ORDER BY updated_at DESC LIMIT $3",[u,like,limit]);
+   out.push(...r.rows);
+  }
+  res.json({query:q,results:out.slice(0,limit),algorithmVersion:"horus-search-v1"});
+ }catch{res.status(500).json({error:"search failed"})}
+});
+
 router.get("/entities/:id/evidence",async(req,res)=>{
  try{
   const u=uid(req),id=clean(req.params.id,80);
