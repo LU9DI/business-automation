@@ -3,6 +3,7 @@ import authRoutes from "./src/routes/authRoutes.js";
 import platformRoutes from "./src/routes/platformRoutes.js";
 import workflowRoutes from "./src/routes/workflowRoutes.js";
 import webhookRoutes from "./src/routes/webhookRoutes.js";
+import sentinelRoutes from "./src/routes/sentinelRoutes.js";
 import express from "express";
 import acquisitionRoutes from "./src/routes/acquisitionRoutes.js";
 import cors from "cors";
@@ -69,6 +70,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/platform", platformRoutes);
 app.use("/api/workflows", workflowRoutes);
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/sentinel", sentinelRoutes);
 
 
 app.get("/robots.txt", (req, res) => {
