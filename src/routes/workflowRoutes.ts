@@ -121,9 +121,10 @@ router.patch("/:id",requireAuth,async(req,res)=>{
   try{
     const w=prepareWorkflow(req.body);
     await db.query("BEGIN");
-    // Acquire the same application lock before the row lock to keep execution/edit lock order consistent.
+    // The advisory lock is the workflow-level serialization point. The UPDATE below
+    // takes PostgreSQL's row lock automatically; no second explicit row-lock queue is needed.
     await lockWorkflowExclusive(db,String(req.params.id));
-    const own=await db.query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE",[req.params.id,(req as any).userId]);
+    const own=await db.query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE id=$1 AND user_id=$2",[req.params.id,(req as any).userId]);
     if(!own.rowCount){await db.query("ROLLBACK");return res.status(404).json({error:"workflow not found"});}
     const active=await db.query("SELECT COUNT(*)::int count FROM workflow_runs WHERE workflow_id=$1 AND user_id=$2 AND status IN ('running','queued')",[req.params.id,(req as any).userId]);
     if(Number(active.rows[0].count)>0){await db.query("ROLLBACK");return res.status(409).json({error:"workflow has active executions"});}
