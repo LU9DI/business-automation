@@ -1,8 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { initDb } from "../core/db.js";
 
+const WORKFLOW_LOCK_NAMESPACE = "business-automation:workflow";
+
+export async function lockWorkflowShared(client:any,workflowId:string){
+  await client.query("SELECT pg_advisory_xact_lock_shared(hashtext($1),hashtext($2))",[WORKFLOW_LOCK_NAMESPACE,workflowId]);
+}
+
+export async function lockWorkflowExclusive(client:any,workflowId:string){
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))",[WORKFLOW_LOCK_NAMESPACE,workflowId]);
+}
+
 export async function createWorkflowVersion(workflowId:string,userId:string,client?:any){
  const db=client??initDb();
+ await lockWorkflowExclusive(db,workflowId);
  const own=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE",[workflowId,userId]);
  if(!own.rowCount) return null;
  const v=await db.query("SELECT COALESCE(MAX(version),0)+1 version FROM workflow_versions WHERE workflow_id=$1",[workflowId]);
@@ -17,10 +28,12 @@ export async function recordAttempt(runId:string,attempt:number,status:string,er
 }
 
 export async function ensureWorkflowVersion(workflowId:string,userId:string,client?:any){
- // Execution takes a shared row lock: concurrent executions may capture the same
- // committed version in parallel, while an edit's FOR UPDATE waits for all readers.
- // Keep the exclusive lock in createWorkflowVersion/PATCH so execution × edit remains serialized.
+ // Advisory locking deliberately serializes execution-vs-edit at the application resource
+ // level. Shared execution locks may coexist, but once an exclusive edit request is waiting,
+ // later shared requests are arbitrated by PostgreSQL's general lock manager instead of
+ // entering a tuple MultiXact that can repeatedly overtake the exclusive waiter.
  const db=client??initDb();
+ await lockWorkflowShared(db,workflowId);
  const own=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2 FOR SHARE",[workflowId,userId]);
  if(!own.rowCount) return null;
  const latest=await db.query("SELECT id,version,definition FROM workflow_versions WHERE workflow_id=$1 ORDER BY version DESC LIMIT 1",[workflowId]);
