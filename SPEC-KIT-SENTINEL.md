@@ -62,6 +62,14 @@ Horus é uma plataforma de inteligência assistida por IA para correlacionar dad
 - Índices compostos foram preparados para entidades, relações, eventos, alertas, casos, auditoria, análises e regras.
 - O Rule Lab da interface permite criar, ativar/desativar e executar regras sem transformar o mecanismo em decisão automatizada.
 
+### Investigation Intelligence v4 — Correlation Engine
+- Correlação contextual por caso entre sinais, eventos e relacionamentos.
+- Janela temporal configurável de 1–720 horas e limite de resultados controlado.
+- Detecção de sequências temporais, interseções evento↔relacionamento e sobreposição sinal↔entidade.
+- Cada correlação retorna evidências referenciáveis, justificativa e relevância técnica limitada a ordenação/visualização.
+- horus-correlation-v2, humanReviewRequired=true, registro em sentinel_analysis_runs e auditoria da execução.
+- A interface do Evidence Center expõe o Correlation Explorer sem converter relevância técnica em probabilidade ou conclusão investigativa.
+
 ## Próximas fases
 1. UI própria do Sentinel.
 2. Visualização de grafo e timeline.
