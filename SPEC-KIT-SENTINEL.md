@@ -14,6 +14,12 @@ Plataforma de inteligência assistida por IA para correlacionar dados autorizado
 - Versionamento dos algoritmos e rastreabilidade dos resultados.
 
 ## Módulos implementados
+- Dashboard web completo em `/sentinel` com visão geral, KPIs, alertas e workspace responsivo.
+- Grafo visual interativo com arraste, zoom, busca e inspeção de entidades.
+- Timeline de eventos com ordenação temporal e origem.
+- AI Analyst evidence-grounded com pergunta livre, evidências, versão e revisão humana.
+- Importação sintética JSON/CSV limitada a 200 registros por lote, com proveniência.
+- Biblioteca de cenários demonstrativos sintéticos executáveis.
 - Grafo de entidades e relacionamentos.
 - Eventos financeiros/operacionais.
 - Alertas explicáveis.
