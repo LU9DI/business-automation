@@ -1,7 +1,7 @@
-# Sentinel AI — Spec Kit
+# Horus — Intelligence OS Spec Kit
 
 ## Objetivo
-Plataforma de inteligência assistida por IA para correlacionar dados autorizados, eventos e vínculos, apoiar investigações e produzir alertas explicáveis para revisão humana.
+Horus é uma plataforma de inteligência assistida por IA para correlacionar dados autorizados, eventos e vínculos, apoiar investigações e produzir alertas explicáveis para revisão humana.
 
 ## Princípios
 - Assistência, não decisão automatizada.
