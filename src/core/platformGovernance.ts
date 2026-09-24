@@ -3,6 +3,17 @@ import { initDb } from "./db.js";
 
 export type Entitlement = { allowed: boolean; limit: number | null; plan: string };
 
+export class EntitlementError extends Error {
+  readonly code = "ENTITLEMENT_LIMIT";
+  constructor(public readonly feature: string, public readonly limit: number | null, message: string) { super(message); }
+}
+
+export function assertEntitlement(entitlement: Entitlement, feature: string, current: number): Entitlement {
+  if (!entitlement.allowed) throw new EntitlementError(feature, entitlement.limit, `feature disabled: ${feature}`);
+  if (entitlement.limit !== null && current >= entitlement.limit) throw new EntitlementError(feature, entitlement.limit, `limit reached: ${feature}`);
+  return entitlement;
+}
+
 export async function getEntitlement(userId: string, feature: string): Promise<Entitlement> {
   const r = await initDb().query(
     `SELECT u.plan, e.enabled, e.limit_value
@@ -18,9 +29,7 @@ export async function getEntitlement(userId: string, feature: string): Promise<E
 
 export async function enforceLimit(userId: string, feature: string, current: number): Promise<Entitlement> {
   const entitlement = await getEntitlement(userId, feature);
-  if (!entitlement.allowed) throw new Error(`feature disabled: ${feature}`);
-  if (entitlement.limit !== null && current >= entitlement.limit) throw new Error(`limit reached: ${feature}`);
-  return entitlement;
+  return assertEntitlement(entitlement, feature, current);
 }
 
 export async function audit(
