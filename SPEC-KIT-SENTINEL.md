@@ -36,15 +36,23 @@ Horus é uma plataforma de inteligência assistida por IA para correlacionar dad
 - rótulos de relacionamento, tamanho proporcional ao grau e seleção de entidade;
 - exploração de caminho de até cinco saltos;
 - drawer de evidências da entidade com relações, eventos e alertas relacionados;
-- visualização preparada para expansão multi-hop sem transformar conexões em conclusões.
+- visualização preparada para expansão multi-hop sem transformar conexões em conclusões;
+- grafo contextual por caso com profundidade 1–3 e destaque das entidades do caso.
 
 ### Investigation Workspace v1
 - abertura de casos diretamente pelo dashboard;
 - visão contextual de entidades, alertas, análises e auditoria;
+- grafo contextual e timeline filtrável diretamente no Evidence Center.
 - vínculo de entidades ao caso com papel explícito;
 - execução de análise registrada no caso;
 - evidência e governança apresentadas no mesmo workspace;
 - nenhum resultado do workspace constitui conclusão automática sobre pessoas ou organizações.
+
+### Implementado — Investigation Intelligence v2
+- Grafo contextual por caso com profundidade configurável de 1–3 saltos, limite de nós/arestas e destaque das entidades-semente.
+- Timeline filtrável por período, tipo de evento e entidade, com contagem/valor agregado do recorte.
+- Metadados de versão do algoritmo e revisão humana obrigatória nas novas análises.
+- Busca global corrigida para preservar curingas SQL como dados e manter isolamento por tenant.
 
 ### Próximas fases
 1. UI própria do Sentinel.
