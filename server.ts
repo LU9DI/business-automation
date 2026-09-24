@@ -4,6 +4,7 @@ import platformRoutes from "./src/routes/platformRoutes.js";
 import workflowRoutes from "./src/routes/workflowRoutes.js";
 import webhookRoutes from "./src/routes/webhookRoutes.js";
 import sentinelRoutes from "./src/routes/sentinelRoutes.js";
+import sentinelDashboard from "./src/routes/sentinelDashboard.js";
 import express from "express";
 import acquisitionRoutes from "./src/routes/acquisitionRoutes.js";
 import cors from "cors";
@@ -156,6 +157,9 @@ app.get(["/login","/cadastro","/app","/dashboard","/admin"], (req, res) => {
 app.get("/politica-de-privacidade", (_req,res)=>res.type("html").send(renderPrivacy()));
 app.get("/", (req,res)=>res.type("html").send(renderSite(req,"/","Business Automation","Automatize processos com workflows, integrações e rastreabilidade.")));
 for (const [path, pageTitle, description] of PUBLIC_PAGES) app.get(path,(req,res)=>res.type("html").send(renderSite(req,path,pageTitle,description)));
+
+app.get("/sentinel", (req,res) => res.redirect("/sentinel/"));
+app.use("/sentinel", sentinelDashboard);
 
 app.use("/api/acquisition/automation", acquisitionAutomationRoutes);
 app.use("/api/acquisition", acquisitionRoutes);
