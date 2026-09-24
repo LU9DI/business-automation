@@ -82,7 +82,7 @@ test("workflow execution waits for an edit and captures the committed version", 
     );
     await db.query(
       "INSERT INTO workflow_versions(id,workflow_id,version,definition,created_by) VALUES($1,$2,1,$3,$4)",
-      [randomUUID(), workflowId, userId ? JSON.stringify({ id: workflowId, name: "before-edit", enabled: true, steps: [] }) : "{}", userId],
+      [randomUUID(), workflowId, JSON.stringify({ id: workflowId, name: "before-edit", enabled: true, steps: [] }), userId],
     );
 
     await editor.query("BEGIN");
