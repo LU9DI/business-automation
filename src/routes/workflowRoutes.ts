@@ -5,6 +5,7 @@ import { listConnectors } from "../services/connectors.js";
 import { redactedJson } from "../services/redaction.js";
 import { initDb } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { createWorkflowVersion } from "../services/executionPolicy.js";
 
 const router=Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -19,6 +20,7 @@ router.post("/",requireAuth,async(req,res)=>{try{const w=prepareWorkflow(req.bod
 
 router.get("/",requireAuth,async(req,res)=>{try{const limit=parseLimit(req.query.limit),offset=parseOffset(req.query.offset);const db=initDb();const r=await db.query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3",[(req as any).userId,limit,offset]);const count=await db.query("SELECT COUNT(*)::int count FROM workflows WHERE user_id=$1",[(req as any).userId]);res.json({workflows:r.rows,pagination:{limit,offset,total:Number(count.rows[0].count),hasMore:offset+r.rows.length<Number(count.rows[0].count)}});}catch{res.status(500).json({error:"failed to load workflows"});}});
 
+router.post("/:id/version",requireAuth,async(req,res)=>{try{if(!UUID.test(String(req.params.id)))return res.status(400).json({error:"invalid workflow id"});const version=await createWorkflowVersion(req.params.id,(req as any).userId);if(version==null)return res.status(404).json({error:"workflow not found"});res.status(201).json({workflowId:req.params.id,version});}catch{res.status(500).json({error:"failed to create workflow version"});}});
 router.get("/connectors",requireAuth,(_req,res)=>res.json({connectors:listConnectors()}));
 
 router.post("/validate",requireAuth,(req,res)=>{try{const w=prepareWorkflow(req.body);for(const step of w.steps){if(!listConnectors().includes(String(step.type||"").trim()))return res.status(400).json({valid:false,error:"unsupported connector"});}res.json({valid:true,workflow:w,connectors:listConnectors()});}catch{res.status(400).json({valid:false,error:"invalid workflow"});}});
