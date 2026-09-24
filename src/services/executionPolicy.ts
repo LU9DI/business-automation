@@ -14,7 +14,7 @@ export async function lockWorkflowExclusive(client:any,workflowId:string){
 export async function createWorkflowVersion(workflowId:string,userId:string,client?:any){
  const db=client??initDb();
  await lockWorkflowExclusive(db,workflowId);
- const own=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE",[workflowId,userId]);
+ const own=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2",[workflowId,userId]);
  if(!own.rowCount) return null;
  const v=await db.query("SELECT COALESCE(MAX(version),0)+1 version FROM workflow_versions WHERE workflow_id=$1",[workflowId]);
  const version=Number(v.rows[0].version);
