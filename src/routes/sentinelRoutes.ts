@@ -25,7 +25,7 @@ router.get("/search",async(req,res)=>{
  try{
   const u=uid(req),q=cleanText(req.query.q,120),type=cleanText(req.query.type,30),limit=Math.min(Math.max(Number(req.query.limit)||30,1),50);
   if(q.length<2)return res.json({results:[]});
-  const like = "%" + q.replace(/[%_]/g, "\\$&") + "%";
+  const like = "%" + q.replace(/[\\%_]/g, "\\q.replace(/[%_]/g, "\\$&")") + "%";
   const p:any[]=[u,like],filters=type&&["entity","case","alert"].includes(type)?type:"";
   const out:any[]=[];
   if(!filters||filters==="entity"){
