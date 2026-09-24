@@ -54,7 +54,15 @@ Horus é uma plataforma de inteligência assistida por IA para correlacionar dad
 - Metadados de versão do algoritmo e revisão humana obrigatória nas novas análises.
 - Busca global corrigida para preservar curingas SQL como dados e manter isolamento por tenant.
 
-### Próximas fases
+### Investigation Intelligence v3 — Rule Lab
+- Motor de regras configuráveis por workspace com tipos versionados: conectividade, frequência/burst temporal, limiar de valor e atributo compartilhado.
+- Cada regra possui versão, severidade, definição JSONB, estado habilitado/desabilitado e trilha de auditoria.
+- Avaliação gera somente sinais assistivos, com rationale, evidências, algoritmo `horus-rules-v1` e `humanReviewRequired=true`.
+- Deduplicação impede repetição de sinais abertos/revisando para a mesma regra e evidência principal.
+- Índices compostos foram preparados para entidades, relações, eventos, alertas, casos, auditoria, análises e regras.
+- O Rule Lab da interface permite criar, ativar/desativar e executar regras sem transformar o mecanismo em decisão automatizada.
+
+## Próximas fases
 1. UI própria do Sentinel.
 2. Visualização de grafo e timeline.
 3. Importadores CSV/JSON com validação e proveniência.
