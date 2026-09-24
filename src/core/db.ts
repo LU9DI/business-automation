@@ -28,6 +28,7 @@ export function initDb() {
     pool.on("error", (error) => {
       console.error(JSON.stringify({ event: "db.pool_error", error: error.message }));
     });
+    pool.on("error", (error) => console.error(JSON.stringify({ event: "db.pool_error", error: error.message })));
   }
 
   return pool;
