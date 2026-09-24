@@ -2,11 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { initDb } from "../src/core/db.js";
-import { createWorkflowVersion, ensureWorkflowVersion } from "../src/services/executionPolicy.js";
+import {
+  createWorkflowVersion,
+  ensureWorkflowVersion,
+  lockWorkflowExclusive,
+} from "../src/services/executionPolicy.js";
 
 const enabled = process.env.RUN_DB_INTEGRATION === "1" && !!process.env.DATABASE_URL;
 
-test("workflow version capture allows concurrent executions with shared locks", { skip: !enabled }, async () => {
+test("workflow version capture allows concurrent executions with shared advisory locks", { skip: !enabled }, async () => {
   const db = initDb();
   const userId = randomUUID();
   const workflowId = randomUUID();
@@ -35,17 +39,10 @@ test("workflow version capture allows concurrent executions with shared locks", 
     const first = ensureWorkflowVersion(workflowId, userId, c1);
     const second = ensureWorkflowVersion(workflowId, userId, c2);
 
-    let timedOut = false;
-    try {
-      await Promise.race([
-        Promise.all([first, second]),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("shared-lock acquisition timed out")), 500)),
-      ]);
-    } catch {
-      timedOut = true;
-    }
-
-    assert.equal(timedOut, false, "concurrent executions must both acquire FOR SHARE without waiting for each other");
+    await Promise.race([
+      Promise.all([first, second]),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("shared advisory-lock acquisition timed out")), 500)),
+    ]);
 
     const [v1, v2] = await Promise.all([first, second]);
     assert.equal(v1?.id, v2?.id);
@@ -86,6 +83,7 @@ test("workflow execution waits for an edit and captures the committed version", 
     );
 
     await editor.query("BEGIN");
+    await lockWorkflowExclusive(editor, workflowId);
     await editor.query(
       "SELECT id FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE",
       [workflowId, userId],
@@ -117,8 +115,7 @@ test("workflow execution waits for an edit and captures the committed version", 
   }
 });
 
-
-test("workflow edit is not starved by a continuous stream of shared execution locks", { skip: !enabled }, async () => {
+test("workflow edit is not starved by a continuous stream of shared advisory locks", { skip: !enabled }, async () => {
   const db = initDb();
   const userId = randomUUID();
   const workflowId = randomUUID();
@@ -144,20 +141,16 @@ test("workflow edit is not starved by a continuous stream of shared execution lo
       [randomUUID(), workflowId, JSON.stringify({ id: workflowId, name: "liveness-test", enabled: true, steps: [] }), userId],
     );
 
-    // Seed one reader so the editor is guaranteed to become a real waiter.
+    // Keep one shared holder alive while the exclusive editor request joins the lock queue.
     await seedReader.query("BEGIN");
     await ensureWorkflowVersion(workflowId, userId, seedReader);
 
     await editor.query("BEGIN");
-    const editorLock = editor.query(
-      "SELECT id FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE",
-      [workflowId, userId],
-    );
+    const editorLock = lockWorkflowExclusive(editor, workflowId);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await seedReader.query("COMMIT");
+    // Give the exclusive request time to become a waiter before new shared readers arrive.
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const editorAcquired = Promise.resolve(editorLock);
     const readerLoops = readers.map(async (reader) => {
       while (!stop) {
         await reader.query("BEGIN");
@@ -173,13 +166,16 @@ test("workflow edit is not starved by a continuous stream of shared execution lo
       }
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await seedReader.query("COMMIT");
+
     await Promise.race([
-      editorAcquired,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("editor lock appears starved by shared execution locks")), 3000)),
+      editorLock,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("exclusive workflow edit appears starved by shared execution locks")), 3000)),
     ]);
 
-    stop = true;
     await editor.query("ROLLBACK");
+    stop = true;
     await Promise.all(readerLoops);
 
     assert.ok(readerCaptures > 0, "the liveness test must exercise repeated execution locks");
