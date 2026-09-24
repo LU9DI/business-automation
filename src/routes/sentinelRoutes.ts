@@ -253,28 +253,41 @@ router.post("/import",async(req,res)=>{
  const format=clean(req.body?.format,10);
  const raw=String(req.body?.data||"");
  if(!["json","csv"].includes(format)||!raw)return res.status(400).json({error:"sourceName, format and data are required"});
+ if(Buffer.byteLength(raw,"utf8")>1_000_000)return res.status(413).json({error:"synthetic import payload exceeds 1MB"});
  try{
-  const u=uid(req);
-  let records:any[]=[];
+  const u=uid(req); let records:any[]=[];
   if(format==="json"){
    const parsed=JSON.parse(raw);
    records=Array.isArray(parsed)?parsed:(Array.isArray(parsed.records)?parsed.records:[]);
   }else{
-   const lines=raw.split(/\r?\n/).filter(Boolean);
-   if(lines.length){const headers=lines[0].split(",").map(x=>x.trim());records=lines.slice(1).map(line=>{const vals=line.split(",");return Object.fromEntries(headers.map((h,i)=>[h,vals[i]?.trim()??""]))});}
+   const parseCsv=(text:string)=>{
+    const rows:string[][]=[];let row:string[]=[],cell="",quoted=false;
+    for(let i=0;i<text.length;i++){const ch=text[i],next=text[i+1];
+     if(ch==='"'&&quoted&&next==='"'){cell+='"';i++;continue}
+     if(ch==='"'){quoted=!quoted;continue}
+     if(ch===','&&!quoted){row.push(cell.trim());cell="";continue}
+     if((ch==='\\n'||ch==='\\r')&&!quoted){if(ch==='\\r'&&next==='\\n')i++;row.push(cell.trim());cell="";if(row.some(Boolean))rows.push(row);row=[];continue}
+     cell+=ch;
+    }
+    if(quoted)throw new Error("unterminated csv quote");
+    row.push(cell.trim());if(row.some(Boolean))rows.push(row);return rows;
+   };
+   const rows=parseCsv(raw);
+   if(rows.length){const headers=rows[0].map(x=>clean(x,80));if(!headers.length||headers.some(h=>!h))throw new Error("invalid csv header");records=rows.slice(1,202).map(vals=>Object.fromEntries(headers.map((h,i)=>[h,vals[i]??""])));}
   }
-  if(records.length>200)return res.status(413).json({error:"synthetic import limit is 200 records"});
-  const id=randomUUID();
+  if(!Array.isArray(records)||records.length>200)return res.status(413).json({error:"synthetic import limit is 200 records"});
+  const id=randomUUID();let accepted=0;
   await withTransaction(async c=>{
-   await c.query("INSERT INTO sentinel_imports(id,user_id,source_name,format,synthetic,row_count,metadata) VALUES($1,$2,$3,$4,true,$5,$6)",[id,u,sourceName,format,records.length,json({parser:"sentinel-import-v1"})]);
    for(const r of records){
-    const name=clean(r.name||r.entity_name,180), type=clean(r.entity_type||r.entityType,40);
+    if(!r||typeof r!=="object"||Array.isArray(r))continue;
+    const name=clean((r as any).name||(r as any).entity_name,180),type=clean((r as any).entity_type||(r as any).entityType,40);
     if(name&&["person","company","account","contract","asset","address","vehicle","case","organization"].includes(type)){
-      await c.query("INSERT INTO sentinel_entities(id,user_id,entity_type,name,external_ref,metadata) VALUES($1,$2,$3,$4,$5,$6)",[randomUUID(),u,type,name,clean(r.external_ref||r.externalRef,120)||null,json({synthetic:true,importId:id})]);
+      await c.query("INSERT INTO sentinel_entities(id,user_id,entity_type,name,external_ref,metadata) VALUES($1,$2,$3,$4,$5,$6)",[randomUUID(),u,type,name,clean((r as any).external_ref||(r as any).externalRef,120)||null,json({synthetic:true})]);accepted++;
     }
    }
+   await c.query("INSERT INTO sentinel_imports(id,user_id,source_name,format,synthetic,row_count,status,metadata) VALUES($1,$2,$3,$4,true,$5,$6,$7)",[id,u,sourceName,format,records.length,accepted===records.length?"completed":accepted?"partial":"rejected",json({parser:"horus-import-v2",accepted})]);
   });
-  res.status(201).json({importId:id,rows:records.length,synthetic:true});
+  res.status(201).json({importId:id,rows:records.length,accepted,synthetic:true});
  }catch{res.status(400).json({error:"invalid synthetic import payload"});}
 });
 
