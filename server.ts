@@ -170,7 +170,7 @@ app.get("/api/metrics", (req, res) => {
 app.use(errorHandler);
 export { app };
 
-if (process.env.RUN_HTTP_INTEGRATION !== "1") {
+if (process.env.NODE_ENV !== "test") {
   const server = app.listen(port, () => console.log("business-automation API listening on " + port));
   let shuttingDown = false;
   const shutdown = () => { if (shuttingDown) return; shuttingDown = true; server.close(async () => { try { await closeDb(); } finally { process.exit(0); } }); };
