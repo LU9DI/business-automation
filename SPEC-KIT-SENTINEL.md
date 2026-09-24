@@ -96,3 +96,14 @@ Horus é uma plataforma de inteligência assistida por IA para correlacionar dad
 
 ## Nota regulatória
 Para segurança pública e investigação penal, a arquitetura deve ser submetida à análise jurídica e de proteção de dados antes de qualquer uso com dados pessoais reais. A LGPD possui tratamento específico para essas finalidades e prevê requisitos adicionais para atuação de entidades privadas.
+
+
+## Investigation Intelligence v5 — Reliability & Code Hygiene
+- Centralized Horus validation primitives in `src/domain/sentinelValidation.ts`.
+- Shared entity/rule vocabularies prevent route-level drift.
+- Numeric inputs are validated as finite values before persistence.
+- SQL LIKE search escaping is centralized and protects backslash, `%`, and `_` wildcards.
+- PostgreSQL interval arithmetic uses explicit interval multiplication instead of parameterized `make_interval` calls.
+- Dashboard error handling normalizes unknown `catch` values under TypeScript strict mode.
+- CI regression fixed for the workflow-domain assertion; GitLab verification pipeline passes.
+- No production/main database migration was applied as part of this hardening pass.
