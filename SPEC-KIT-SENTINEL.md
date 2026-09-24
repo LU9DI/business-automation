@@ -31,7 +31,14 @@ Horus é uma plataforma de inteligência assistida por IA para correlacionar dad
 - Dataset sintético.
 - API autenticada.
 
-## Próximas fases
+### Graph Engine v1
+- visualização baseada nas relações reais retornadas por `/api/sentinel/graph`;
+- rótulos de relacionamento, tamanho proporcional ao grau e seleção de entidade;
+- exploração de caminho de até cinco saltos;
+- drawer de evidências da entidade com relações, eventos e alertas relacionados;
+- visualização preparada para expansão multi-hop sem transformar conexões em conclusões.
+
+### Próximas fases
 1. UI própria do Sentinel.
 2. Visualização de grafo e timeline.
 3. Importadores CSV/JSON com validação e proveniência.
