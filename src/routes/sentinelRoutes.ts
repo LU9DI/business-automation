@@ -2,7 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { initDb, withTransaction } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
-import { ENTITY_TYPES, RULE_KINDS, RULE_SEVERITIES, cleanText, finiteNumber } from "../domain/sentinelValidation.js";
+import { ENTITY_TYPES, RULE_KINDS, RULE_SEVERITIES, cleanText, escapeLike, finiteNumber } from "../domain/sentinelValidation.js";
 
 const router = Router();
 router.use(requireAuth);
