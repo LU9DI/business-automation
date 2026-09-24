@@ -35,6 +35,10 @@ export function clampInt(
   return Math.min(Math.max(Math.trunc(parsed), min), max);
 }
 
+export function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\export function finiteNumber(value: unknown): number | null {");
+}
+
 export function finiteNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
