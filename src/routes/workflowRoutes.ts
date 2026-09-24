@@ -5,7 +5,7 @@ import { listConnectors } from "../services/connectors.js";
 import { redactedJson } from "../services/redaction.js";
 import { initDb } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
-import { createWorkflowVersion, recordAttempt, ensureWorkflowVersion } from "../services/executionPolicy.js";
+import { createWorkflowVersion, recordAttempt, ensureWorkflowVersion, lockWorkflowExclusive } from "../services/executionPolicy.js";
 import { audit, enforceLimit, getEntitlement, reserveIdempotency, completeIdempotency, withEntitlementLock, assertEntitlement } from "../core/platformGovernance.js";
 
 const router=Router();
@@ -121,6 +121,8 @@ router.patch("/:id",requireAuth,async(req,res)=>{
   try{
     const w=prepareWorkflow(req.body);
     await db.query("BEGIN");
+    // Acquire the same application lock before the row lock to keep execution/edit lock order consistent.
+    await lockWorkflowExclusive(db,String(req.params.id));
     const own=await db.query("SELECT id,name,enabled,steps,created_at,updated_at FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE",[req.params.id,(req as any).userId]);
     if(!own.rowCount){await db.query("ROLLBACK");return res.status(404).json({error:"workflow not found"});}
     const active=await db.query("SELECT COUNT(*)::int count FROM workflow_runs WHERE workflow_id=$1 AND user_id=$2 AND status IN ('running','queued')",[req.params.id,(req as any).userId]);
