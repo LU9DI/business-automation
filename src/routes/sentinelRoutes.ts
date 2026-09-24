@@ -378,29 +378,50 @@ router.post("/signals/:id/review",async(req,res)=>{
 
 router.get("/cases/:id/correlation",async(req,res)=>{
  try{
-  const u=uid(req),caseId=clean(req.params.id,80),db=await initDb();
-  const check=await db.query("SELECT id,title,status FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
+  const u=uid(req),caseId=clean(req.params.id,80),windowHours=Math.min(Math.max(Number(req.query.windowHours)||48,1),720),limit=Math.min(Math.max(Number(req.query.limit)||100,1),100),db=await initDb();
+  const check=await db.query("SELECT id,title,status,purpose,classification FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
   if(!check.rowCount)return res.status(404).json({error:"case not found"});
   const entities=(await db.query("SELECT entity_id FROM sentinel_case_entities WHERE case_id=$1",[caseId])).rows.map(x=>x.entity_id);
-  if(!entities.length)return res.json({case:check.rows[0],correlations:[],algorithmVersion:"horus-correlation-v1",humanReviewRequired:true});
-  const signals=await db.query(\`SELECT a.id,a.title,a.severity,a.status,a.created_at,a.entity_ids,a.rationale
-    FROM sentinel_alerts a WHERE a.user_id=$1 AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(a.entity_ids) x WHERE x=ANY($2::text[]))
-    ORDER BY a.created_at DESC LIMIT 100\`,[u,entities]);
-  const events=await db.query(\`SELECT ev.id,ev.event_type,ev.occurred_at,ev.entity_id,ev.amount,ev.currency,ev.source
-    FROM sentinel_events ev WHERE ev.user_id=$1 AND ev.entity_id=ANY($2::text[]) ORDER BY ev.occurred_at DESC LIMIT 200\`,[u,entities]);
-  const rel=await db.query(\`SELECT e.id,e.source_id,e.target_id,e.relation,e.weight
-    FROM sentinel_edges e WHERE e.user_id=$1 AND (e.source_id=ANY($2::text[]) OR e.target_id=ANY($2::text[])) ORDER BY e.weight DESC NULLS LAST LIMIT 200\`,[u,entities]);
-  const entitySet=new Set(entities),neighborIds=[...new Set(rel.rows.flatMap((x:any)=>[x.source_id,x.target_id]).filter((x:string)=>!entitySet.has(x)))];
-  const neighbors=neighborIds.length?await db.query("SELECT id,name,entity_type FROM sentinel_entities WHERE user_id=$1 AND id=ANY($2::text[])",[u,neighborIds]):{rows:[]};
-  const correlations=signals.rows.map((s:any)=>({
-   type:"signal",id:s.id,title:s.title,severity:s.severity,status:s.status,createdAt:s.created_at,
-   evidence:{entityIds:s.entity_ids,rationale:s.rationale}
-  }));
-  correlations.push(...rel.rows.map((x:any)=>({type:"relationship",id:x.id,sourceId:x.source_id,targetId:x.target_id,relation:x.relation,weight:x.weight})));
-  correlations.push(...events.rows.map((x:any)=>({type:"event",id:x.id,eventType:x.event_type,occurredAt:x.occurred_at,entityId:x.entity_id,amount:x.amount,currency:x.currency,source:x.source})));
-  await db.query("INSERT INTO sentinel_analysis_runs(id,user_id,case_id,analysis_type,algorithm_version,input_summary,result_summary,human_review_required) VALUES($1,$2,$3,'case_correlation','horus-correlation-v1',$4,$5,true)",[randomUUID(),u,caseId,json({entityCount:entities.length}),json({signals:signals.rowCount,events:events.rowCount,relationships:rel.rowCount,neighborEntities:neighbors.rowCount})]);
-  res.json({case:check.rows[0],caseEntityIds:entities,correlations,neighborEntities:neighbors.rows,counts:{signals:signals.rowCount,events:events.rowCount,relationships:rel.rowCount,neighborEntities:neighbors.rowCount},algorithmVersion:"horus-correlation-v1",humanReviewRequired:true,disclaimer:"Correlação contextual para revisão humana; não constitui prova ou conclusão sobre pessoas ou organizações."});
- }catch{res.status(500).json({error:"failed to correlate case evidence"});}
+  if(!entities.length)return res.json({case:check.rows[0],caseEntityIds:[],correlations:[],windowHours,counts:{signals:0,events:0,relationships:0,temporal:0,intersections:0},algorithmVersion:"horus-correlation-v2",humanReviewRequired:true});
+  const [signals,events,rel]=await Promise.all([
+   db.query("SELECT a.id,a.title,a.severity,a.status,a.created_at,a.entity_ids,a.rationale FROM sentinel_alerts a WHERE a.user_id=$1 AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(a.entity_ids) x WHERE x=ANY($2::text[])) ORDER BY a.created_at DESC LIMIT 100",[u,entities]),
+   db.query("SELECT ev.id,ev.event_type,ev.occurred_at,ev.entity_id,ev.amount,ev.currency,ev.source FROM sentinel_events ev WHERE ev.user_id=$1 AND ev.entity_id=ANY($2::text[]) AND ev.occurred_at>=now()-make_interval(hours=>$3) ORDER BY ev.occurred_at DESC LIMIT 300",[u,entities,windowHours]),
+   db.query("SELECT e.id,e.source_id,e.target_id,e.relation,e.weight FROM sentinel_edges e WHERE e.user_id=$1 AND (e.source_id=ANY($2::text[]) OR e.target_id=ANY($2::text[])) ORDER BY e.weight DESC NULLS LAST LIMIT 200",[u,entities])
+  ]);
+  const correlations:any[]=[];
+  const eventRows=[...events.rows].sort((x:any,y:any)=>Date.parse(x.occurred_at)-Date.parse(y.occurred_at));
+  const byEntity=new Map<string,any[]>();
+  for(const ev of eventRows){const list=byEntity.get(ev.entity_id)||[];list.push(ev);byEntity.set(ev.entity_id,list);}
+  for(const [entityId,list] of byEntity){
+   for(let i=1;i<list.length;i++){
+    const prev=list[i-1],cur=list[i],delta=Math.max(0,(Date.parse(cur.occurred_at)-Date.parse(prev.occurred_at))/3600000);
+    if(delta<=windowHours){
+     const proximity=Math.max(0,1-delta/windowHours),score=Math.min(100,45+Math.round(proximity*35)+Math.min(20,list.length*3));
+     correlations.push({type:"temporal_sequence",title:"Sequência temporal de eventos",reason:"Dois eventos consecutivos da mesma entidade ocorreram dentro da janela configurada.",relevanceScore:score,entityId,occurredAt:cur.occurred_at,evidence:{eventIds:[prev.id,cur.id],deltaHours:Number(delta.toFixed(2)),eventCount:list.length}});
+    }
+   }
+  }
+  for(const edge of rel.rows){
+   const eventHits=eventRows.filter((ev:any)=>ev.entity_id===edge.source_id||ev.entity_id===edge.target_id).slice(-5);
+   if(eventHits.length){
+    const score=Math.min(100,55+Math.min(25,eventHits.length*5)+Math.min(20,Number(edge.weight||1)*2));
+    correlations.push({type:"event_relationship_intersection",title:"Evento conectado a relacionamento",reason:"Eventos do caso intersectam uma relação estrutural registrada no grafo.",relevanceScore:score,relation:edge.relation,evidence:{relationshipId:edge.id,eventIds:eventHits.map((x:any)=>x.id),entityIds:[edge.source_id,edge.target_id]}});
+   }
+  }
+  const signalEntitySets=signals.rows.map((s:any)=>({s,ids:Array.isArray(s.entity_ids)?s.entity_ids:[]}));
+  for(const item of signalEntitySets){
+   const overlap=item.ids.filter((id:string)=>entities.includes(id));
+   if(overlap.length>=1){
+    const sev=item.s.severity==="high"?25:item.s.severity==="medium"?15:8;
+    correlations.push({type:"signal_evidence_overlap",title:"Sinal com evidência no caso",reason:"Um sinal existente compartilha entidade(s) com o escopo desta investigação.",relevanceScore:Math.min(100,50+sev+overlap.length*5),severity:item.s.severity,status:item.s.status,evidence:{alertId:item.s.id,entityIds:overlap,rationale:item.s.rationale}});
+   }
+  }
+  correlations.sort((x,y)=>(y.relevanceScore||0)-(x.relevanceScore||0));
+  const limited=correlations.slice(0,limit);
+  await db.query("INSERT INTO sentinel_analysis_runs(id,user_id,case_id,analysis_type,algorithm_version,input_summary,result_summary,human_review_required) VALUES($1,$2,$3,'case_correlation','horus-correlation-v2',$4,$5,true)",[randomUUID(),u,caseId,json({entityCount:entities.length,windowHours,eventCount:events.rowCount,relationshipCount:rel.rowCount,signalCount:signals.rowCount}),json({correlations:limited.length,temporal:limited.filter(x=>x.type==="temporal_sequence").length,intersections:limited.filter(x=>x.type==="event_relationship_intersection").length,signalOverlap:limited.filter(x=>x.type==="signal_evidence_overlap").length})]);
+  await db.query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose,metadata) VALUES($1,$2,$2,'case.correlation','case',$3,'contextual evidence correlation',$4)",[randomUUID(),u,caseId,json({algorithmVersion:"horus-correlation-v2",windowHours,correlationCount:limited.length,humanReviewRequired:true})]);
+  res.json({case:check.rows[0],caseEntityIds:entities,correlations:limited,windowHours,counts:{signals:signals.rowCount,events:events.rowCount,relationships:rel.rowCount,temporal:limited.filter(x=>x.type==="temporal_sequence").length,intersections:limited.filter(x=>x.type==="event_relationship_intersection").length},algorithmVersion:"horus-correlation-v2",humanReviewRequired:true,disclaimer:"Correlação contextual para revisão humana; relevância técnica não é probabilidade, culpa ou conclusão investigativa."});
+ }catch{res.status(500).json({error:"failed to correlate case evidence"})}
 });
 
 router.get("/rules",async(req,res)=>{
