@@ -52,4 +52,56 @@ router.get("/alerts",async(req,res)=>{try{const status=clean(req.query.status,20
 
 router.patch("/alerts/:id",async(req,res)=>{const status=clean(req.body?.status,20);if(!["open","reviewing","dismissed","confirmed"].includes(status))return res.status(400).json({error:"invalid status"});try{const r=await initDb().query("UPDATE sentinel_alerts SET status=$1,updated_at=now() WHERE id=$2 AND user_id=$3 RETURNING id,status,updated_at",[status,req.params.id,uid(req)]);if(!r.rowCount)return res.status(404).json({error:"alert not found"});res.json({alert:r.rows[0]})}catch{res.status(500).json({error:"failed to update alert"})}});
 
+router.post("/cases", async (req,res)=>{
+  const title=clean(req.body?.title,180), purpose=clean(req.body?.purpose,500);
+  if(!title||!purpose)return res.status(400).json({error:"title and purpose are required"});
+  try{
+    const id=randomUUID(),u=uid(req);
+    const r=await initDb().query("INSERT INTO sentinel_cases(id,user_id,title,purpose,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id,title,status,purpose,classification,created_at",[id,u,title,purpose,u]);
+    await initDb().query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose) VALUES($1,$2,$3,$4,$5,$6,$7)",[randomUUID(),u,u,"case.created","case",id,purpose]);
+    res.status(201).json({case:r.rows[0]});
+  }catch{res.status(500).json({error:"failed to create case"});}
+});
+
+router.get("/cases",async(req,res)=>{
+  try{const r=await initDb().query("SELECT id,title,status,purpose,classification,created_at,updated_at FROM sentinel_cases WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100",[uid(req)]);res.json({cases:r.rows})}
+  catch{res.status(500).json({error:"failed to load cases"})}
+});
+
+router.post("/cases/:id/entities",async(req,res)=>{
+  const entityId=clean(req.body?.entityId,80),role=clean(req.body?.role,80)||"subject_of_analysis";
+  if(!entityId)return res.status(400).json({error:"entityId is required"});
+  try{
+    const u=uid(req);
+    const ok=await initDb().query("SELECT 1 FROM sentinel_cases WHERE id=$1 AND user_id=$2",[req.params.id,u]);
+    if(!ok.rowCount)return res.status(404).json({error:"case not found"});
+    const ent=await initDb().query("SELECT 1 FROM sentinel_entities WHERE id=$1 AND user_id=$2",[entityId,u]);
+    if(!ent.rowCount)return res.status(404).json({error:"entity not found"});
+    await initDb().query("INSERT INTO sentinel_case_entities(case_id,entity_id,role) VALUES($1,$2,$3) ON CONFLICT(case_id,entity_id) DO UPDATE SET role=EXCLUDED.role",[req.params.id,entityId,role]);
+    await initDb().query("UPDATE sentinel_cases SET updated_at=now() WHERE id=$1 AND user_id=$2",[req.params.id,u]);
+    await initDb().query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[randomUUID(),u,u,"case.entity.attached","case",req.params.id,"case analysis",json({entityId,role})]);
+    res.status(201).json({attached:true});
+  }catch{res.status(500).json({error:"failed to attach entity"});}
+});
+
+router.post("/analysis/run",async(req,res)=>{
+  const caseId=req.body?.caseId?clean(req.body.caseId,80):null;
+  try{
+    const u=uid(req);
+    if(caseId){const c=await initDb().query("SELECT 1 FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);if(!c.rowCount)return res.status(404).json({error:"case not found"});}
+    const entities=await initDb().query("SELECT COUNT(*)::int count FROM sentinel_entities WHERE user_id=$1",[u]);
+    const events=await initDb().query("SELECT COUNT(*)::int count FROM sentinel_events WHERE user_id=$1",[u]);
+    const id=randomUUID();
+    const summary={entities:Number(entities.rows[0].count),events:Number(events.rows[0].count),mode:"rule_based_screening",humanReviewRequired:true};
+    await initDb().query("INSERT INTO sentinel_analysis_runs(id,user_id,case_id,analysis_type,algorithm_version,input_summary,result_summary) VALUES($1,$2,$3,$4,$5,$6,$7)",[id,u,caseId,"screening","sentinel-rules-v1",json(summary),json(summary)]);
+    await initDb().query("INSERT INTO sentinel_audit_log(id,user_id,actor_id,action,resource_type,resource_id,purpose,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[randomUUID(),u,u,"analysis.run","analysis_run",id,"authorized investigative screening",json({caseId,algorithmVersion:"sentinel-rules-v1"})]);
+    res.status(201).json({run:{id,...summary},disclaimer:"Screening is assistive only. It does not establish criminal conduct, money laundering, guilt or liability."});
+  }catch{res.status(500).json({error:"failed to run analysis"});}
+});
+
+router.get("/audit",async(req,res)=>{
+  try{const r=await initDb().query("SELECT id,actor_id,action,resource_type,resource_id,purpose,metadata,created_at FROM sentinel_audit_log WHERE user_id=$1 ORDER BY created_at DESC LIMIT 200",[uid(req)]);res.json({audit:r.rows})}
+  catch{res.status(500).json({error:"failed to load audit log"})}
+});
+
 export default router;
