@@ -17,8 +17,11 @@ export async function recordAttempt(runId:string,attempt:number,status:string,er
 }
 
 export async function ensureWorkflowVersion(workflowId:string,userId:string,client?:any){
+ // Execution takes a shared row lock: concurrent executions may capture the same
+ // committed version in parallel, while an edit's FOR UPDATE waits for all readers.
+ // Keep the exclusive lock in createWorkflowVersion/PATCH so execution × edit remains serialized.
  const db=client??initDb();
- const own=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2 FOR UPDATE",[workflowId,userId]);
+ const own=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2 FOR SHARE",[workflowId,userId]);
  if(!own.rowCount) return null;
  const latest=await db.query("SELECT id,version,definition FROM workflow_versions WHERE workflow_id=$1 ORDER BY version DESC LIMIT 1",[workflowId]);
  if(latest.rowCount) return latest.rows[0];
