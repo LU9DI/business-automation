@@ -24,7 +24,7 @@ router.get("/search",async(req,res)=>{
  try{
   const u=uid(req),q=clean(req.query.q,120),type=clean(req.query.type,30),limit=Math.min(Math.max(Number(req.query.limit)||30,1),50);
   if(q.length<2)return res.json({results:[]});
-  const like="%"+q.replace(/[%_]/g,"\\router.get("/entities/:id/evidence",async(req,res)=>{")+"%";
+  const like="%"+q.replace(/[%_]/g,"\\const like="%"+q.replace(/[%_]/g,"\\router.get("/entities/:id/evidence",async(req,res)=>{")+"%";")+"%";
   const p:any[]=[u,like],filters=type&&["entity","case","alert"].includes(type)?type:"";
   const out:any[]=[];
   if(!filters||filters==="entity"){
@@ -195,6 +195,53 @@ router.get("/graph/path",async(req,res)=>{
   const nodes=await initDb().query("SELECT id,entity_type,name,external_ref FROM sentinel_entities WHERE user_id=$1 AND id=ANY($2::text[])",[u,ids]);
   res.json({path:ids,nodes:nodes.rows,depth:r.rows[0].depth,algorithmVersion:"horus-path-v1",humanReviewRequired:true});
  }catch{res.status(500).json({error:"graph path analysis failed"})}
+});
+
+router.get("/cases/:id/graph",async(req,res)=>{
+ try{
+  const u=uid(req),caseId=clean(req.params.id,80);
+  const depth=Math.min(Math.max(Number(req.query.depth)||1,1),3);
+  const limit=Math.min(Math.max(Number(req.query.limit)||250,1),500);
+  const c0=await initDb().query("SELECT 1 FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
+  if(!c0.rowCount)return res.status(404).json({error:"case not found"});
+  const seeds=await initDb().query("SELECT entity_id FROM sentinel_case_entities WHERE case_id=$1",[caseId]);
+  const seedIds=seeds.rows.map((x:any)=>x.entity_id);
+  if(!seedIds.length)return res.json({caseId,depth,entities:[],relationships:[],caseEntityIds:[],algorithmVersion:"horus-case-graph-v1",humanReviewRequired:true});
+  const nodes=await initDb().query(`
+   WITH RECURSIVE walk(id,d) AS (
+    SELECT unnest($3::text[]),0
+    UNION
+    SELECT CASE WHEN e.source_id=w.id THEN e.target_id ELSE e.source_id END,w.d+1
+    FROM walk w JOIN sentinel_edges e ON e.user_id=$1 AND (e.source_id=w.id OR e.target_id=w.id)
+    WHERE w.d<$2
+   )
+   SELECT DISTINCT ON (e.id) e.id,e.entity_type,e.name,e.external_ref,e.metadata
+   FROM sentinel_entities e JOIN walk w ON w.id=e.id WHERE e.user_id=$1 ORDER BY e.id LIMIT $4
+  `,[u,depth,seedIds,limit]);
+  const ids=nodes.rows.map((x:any)=>x.id);
+  const edges=ids.length?await initDb().query("SELECT id,source_id,target_id,relation,weight,metadata FROM sentinel_edges WHERE user_id=$1 AND source_id=ANY($2::text[]) AND target_id=ANY($2::text[]) LIMIT 1000",[u,ids]):{rows:[]};
+  res.json({caseId,depth,entities:nodes.rows,relationships:edges.rows,caseEntityIds:seedIds,algorithmVersion:"horus-case-graph-v1",humanReviewRequired:true});
+ }catch{res.status(500).json({error:"failed to load case graph"})}
+});
+
+router.get("/cases/:id/timeline",async(req,res)=>{
+ try{
+  const u=uid(req),caseId=clean(req.params.id,80);
+  const from=req.query.from?String(req.query.from):null,to=req.query.to?String(req.query.to):null;
+  const eventType=clean(req.query.eventType,80),entityId=clean(req.query.entityId,80);
+  const limit=Math.min(Math.max(Number(req.query.limit)||200,1),200);
+  const c0=await initDb().query("SELECT 1 FROM sentinel_cases WHERE id=$1 AND user_id=$2",[caseId,u]);
+  if(!c0.rowCount)return res.status(404).json({error:"case not found"});
+  const p:any[]=[u,caseId],where=["ev.user_id=$1","ev.entity_id IN (SELECT entity_id FROM sentinel_case_entities WHERE case_id=$2)"];
+  if(from&& !Number.isNaN(Date.parse(from))){p.push(from);where.push("ev.occurred_at >= $"+p.length)}
+  if(to&& !Number.isNaN(Date.parse(to))){p.push(to);where.push("ev.occurred_at <= $"+p.length)}
+  if(eventType){p.push(eventType);where.push("ev.event_type=$"+p.length)}
+  if(entityId){p.push(entityId);where.push("ev.entity_id=$"+p.length)}
+  p.push(limit);
+  const events=await initDb().query("SELECT ev.id,ev.event_type,ev.occurred_at,ev.entity_id,ev.amount,ev.currency,ev.source,e.name AS entity_name FROM sentinel_events ev LEFT JOIN sentinel_entities e ON e.id=ev.entity_id AND e.user_id=ev.user_id WHERE "+where.join(" AND ")+" ORDER BY ev.occurred_at DESC LIMIT $"+p.length,p);
+  const total=events.rows.reduce((s:any,x:any)=>s+(x.amount==null?0:Number(x.amount)),0);
+  res.json({caseId,filters:{from,to,eventType,entityId},events:events.rows,eventCount:events.rows.length,eventValue:String(total),algorithmVersion:"horus-case-timeline-v1",humanReviewRequired:true});
+ }catch{res.status(500).json({error:"failed to load case timeline"})}
 });
 
 router.get("/cases/:id",async(req,res)=>{
