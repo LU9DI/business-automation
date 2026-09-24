@@ -5,7 +5,7 @@ import { listConnectors } from "../services/connectors.js";
 import { redactedJson } from "../services/redaction.js";
 import { initDb } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
-import { createWorkflowVersion } from "../services/executionPolicy.js";
+import { createWorkflowVersion, recordAttempt } from "../services/executionPolicy.js";
 
 const router=Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -63,15 +63,18 @@ router.post("/:id/run",requireAuth,async(req,res)=>{
       return res.status(409).json({error:"workflow run already in progress",runId:row.id,status:row.status,duplicate:true});
     }
 
+    await recordAttempt(runId,1,"running");
     const result=await executeWorkflow(workflow,req.body||{});
     await db.query("UPDATE workflow_runs SET status='succeeded',output=$1,finished_at=now() WHERE id=$2",[redactedJson(result.output),runId]);
+    await recordAttempt(runId,1,"succeeded");
     res.json({runId,...result});
   }catch{
-    if(inserted)await db.query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",["execution failed",runId]).catch(()=>{});
+    if(inserted){await db.query("UPDATE workflow_runs SET status='failed',error=$1,finished_at=now() WHERE id=$2",["execution failed",runId]).catch(()=>{});await recordAttempt(runId,1,"failed","execution failed").catch(()=>{});}
     res.status(400).json({error:"workflow execution failed",runId:inserted?runId:undefined});
   }
 });
 
+router.post("/runs/:runId/retry",requireAuth,async(req,res)=>{try{const runId=String(req.params.runId);if(!UUID.test(runId))return res.status(400).json({error:"invalid run id"});const db=initDb();const r=await db.query("SELECT r.*,w.name,w.enabled,w.steps FROM workflow_runs r JOIN workflows w ON w.id=r.workflow_id WHERE r.id=$1 AND r.user_id=$2",[runId,(req as any).userId]);if(!r.rowCount)return res.status(404).json({error:"run not found"});const row=r.rows[0];if(row.status!=="failed")return res.status(409).json({error:"only failed runs can be retried"});const attempts=await db.query("SELECT COUNT(*)::int count FROM execution_attempts WHERE run_id=$1",[runId]);const attempt=Number(attempts.rows[0].count)+1;if(attempt>3)return res.status(429).json({error:"retry limit reached",limit:3});const workflow=prepareWorkflow({name:row.name,enabled:row.enabled,steps:row.steps});const result=await executeWorkflow(workflow,req.body||{});await recordAttempt(runId,attempt,"running");if(result){await db.query("UPDATE workflow_runs SET status='succeeded',output=$1,error=NULL,finished_at=now() WHERE id=$2",[redactedJson(result.output),runId]);await recordAttempt(runId,attempt,"succeeded");res.json({runId,status:"succeeded",attempt,...result});}}catch{res.status(400).json({error:"workflow retry failed"});}});
 router.get("/runs",requireAuth,async(req,res)=>{try{const limit=parseLimit(req.query.limit),offset=parseOffset(req.query.offset),db=initDb();const r=await db.query("SELECT id,workflow_id,status,input,output,error,started_at,finished_at,created_at FROM workflow_runs WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",[(req as any).userId,limit,offset]);const count=await db.query("SELECT COUNT(*)::int count FROM workflow_runs WHERE user_id=$1",[(req as any).userId]);res.json({runs:r.rows,pagination:{limit,offset,total:Number(count.rows[0].count),hasMore:offset+r.rows.length<Number(count.rows[0].count)}});}catch{res.status(500).json({error:"failed to load runs"});}});
 
 router.patch("/:id",requireAuth,async(req,res)=>{try{if(!UUID.test(String(req.params.id)))return res.status(400).json({error:"invalid workflow id"});const w=prepareWorkflow(req.body);const r=await initDb().query("UPDATE workflows SET name=$1,enabled=$2,steps=$3,updated_at=now() WHERE id=$4 AND user_id=$5 RETURNING id,name,enabled,steps,created_at,updated_at",[w.name,w.enabled,JSON.stringify(w.steps),req.params.id,(req as any).userId]);if(!r.rowCount)return res.status(404).json({error:"workflow not found"});res.json({workflow:r.rows[0]});}catch{res.status(400).json({error:"invalid workflow"});}});
