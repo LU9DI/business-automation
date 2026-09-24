@@ -104,4 +104,90 @@ router.get("/audit",async(req,res)=>{
   catch{res.status(500).json({error:"failed to load audit log"})}
 });
 
+
+router.get("/overview/events",async(req,res)=>{
+ try{
+  const r=await initDb().query("SELECT ev.id,ev.event_type,ev.occurred_at,ev.entity_id,ev.amount,ev.currency,ev.source,e.name AS entity_name FROM sentinel_events ev LEFT JOIN sentinel_entities e ON e.id=ev.entity_id AND e.user_id=ev.user_id WHERE ev.user_id=$1 ORDER BY ev.occurred_at DESC LIMIT 200",[uid(req)]);
+  res.json({events:r.rows});
+ }catch{res.status(500).json({error:"failed to load event timeline"});}
+});
+
+router.post("/analyst",async(req,res)=>{
+ const question=clean(req.body?.question,600);
+ if(!question)return res.status(400).json({error:"question is required"});
+ try{
+  const u=uid(req);
+  const [o,e,v,a]=await Promise.all([
+   initDb().query("SELECT COUNT(*)::int count FROM sentinel_entities WHERE user_id=$1",[u]),
+   initDb().query("SELECT e.id,e.name,e.entity_type,COUNT(se.id)::int degree FROM sentinel_entities e LEFT JOIN sentinel_edges se ON se.user_id=e.user_id AND(se.source_id=e.id OR se.target_id=e.id) WHERE e.user_id=$1 GROUP BY e.id ORDER BY degree DESC,e.name LIMIT 8",[u]),
+   initDb().query("SELECT COUNT(*)::int count,COALESCE(SUM(amount),0)::numeric total FROM sentinel_events WHERE user_id=$1",[u]),
+   initDb().query("SELECT COUNT(*)::int count FROM sentinel_alerts WHERE user_id=$1 AND status IN('open','reviewing')",[u])
+  ]);
+  const top=e.rows.map(x=>x.name+" ("+x.entity_type+", "+x.degree+" vínculos)");
+  const answer="A análise estruturada encontrou "+o.rows[0].count+" entidades, "+v.rows[0].count+" eventos e "+a.rows[0].count+" alertas abertos/revisando. A pergunta foi interpretada como análise exploratória; nenhuma inferência de culpa ou crime foi produzida.";
+  res.json({answer,evidence:["Pergunta: "+question,"Entidades mais conectadas: "+(top.join("; ")||"nenhuma"),"Valor agregado de eventos: "+String(v.rows[0].total)],algorithmVersion:"sentinel-analyst-v1",humanReviewRequired:true});
+ }catch{res.status(500).json({error:"analyst failed"});}
+});
+
+router.post("/import",async(req,res)=>{
+ const sourceName=clean(req.body?.sourceName,180)||"synthetic-upload";
+ const format=clean(req.body?.format,10);
+ const raw=String(req.body?.data||"");
+ if(!["json","csv"].includes(format)||!raw)return res.status(400).json({error:"sourceName, format and data are required"});
+ try{
+  const u=uid(req);
+  let records:any[]=[];
+  if(format==="json"){
+   const parsed=JSON.parse(raw);
+   records=Array.isArray(parsed)?parsed:(Array.isArray(parsed.records)?parsed.records:[]);
+  }else{
+   const lines=raw.split(/\r?\n/).filter(Boolean);
+   if(lines.length){const headers=lines[0].split(",").map(x=>x.trim());records=lines.slice(1).map(line=>{const vals=line.split(",");return Object.fromEntries(headers.map((h,i)=>[h,vals[i]?.trim()??""]))});}
+  }
+  if(records.length>200)return res.status(413).json({error:"synthetic import limit is 200 records"});
+  const id=randomUUID();
+  await withTransaction(async c=>{
+   await c.query("INSERT INTO sentinel_imports(id,user_id,source_name,format,synthetic,row_count,metadata) VALUES($1,$2,$3,$4,true,$5,$6)",[id,u,sourceName,format,records.length,json({parser:"sentinel-import-v1"})]);
+   for(const r of records){
+    const name=clean(r.name||r.entity_name,180), type=clean(r.entity_type||r.entityType,40);
+    if(name&&["person","company","account","contract","asset","address","vehicle","case","organization"].includes(type)){
+      await c.query("INSERT INTO sentinel_entities(id,user_id,entity_type,name,external_ref,metadata) VALUES($1,$2,$3,$4,$5,$6)",[randomUUID(),u,type,name,clean(r.external_ref||r.externalRef,120)||null,json({synthetic:true,importId:id})]);
+    }
+   }
+  });
+  res.status(201).json({importId:id,rows:records.length,synthetic:true});
+ }catch{res.status(400).json({error:"invalid synthetic import payload"});}
+});
+
+router.get("/imports",async(req,res)=>{
+ try{const r=await initDb().query("SELECT id,source_name,format,synthetic,row_count,status,created_at FROM sentinel_imports WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50",[uid(req)]);res.json({imports:r.rows});}
+ catch{res.status(500).json({error:"failed to load imports"});}
+});
+
+router.get("/scenarios",(_req,res)=>{
+ res.json({scenarios:[
+  {id:"procurement_network",name:"Rede de contratação",description:"Empresas, contrato, pessoas e contas sintéticas conectadas para explorar vínculos."},
+  {id:"layered_transfers",name:"Transferências em camadas",description:"Eventos sintéticos em sequência entre contas para explorar padrões temporais."},
+  {id:"repeated_contracting",name:"Contratação recorrente",description:"Eventos de contratos repetidos para explorar concentração e frequência."}
+ ]});
+});
+
+router.post("/scenarios/:id/run",async(req,res)=>{
+ const id=clean(req.params.id,60);
+ if(!["procurement_network","layered_transfers","repeated_contracting"].includes(id))return res.status(404).json({error:"scenario not found"});
+ try{
+  const u=uid(req);
+  await withTransaction(async c=>{
+   const a=randomUUID(),b=randomUUID(),c1=randomUUID(),acct1=randomUUID(),acct2=randomUUID(),p=randomUUID();
+   const companyNames=id==="procurement_network"?["Atlas Obras Sintéticas","Horizonte Infra Sintética"]:["Operadora Sintética A","Operadora Sintética B"];
+   for(const [eid,type,name] of [[a,"company",companyNames[0]],[b,"company",companyNames[1]],[c1,"contract","Contrato Sintético"],[acct1,"account","Conta Sintética A"],[acct2,"account","Conta Sintética B"],[p,"person","Responsável Sintético"]] as any[])
+    await c.query("INSERT INTO sentinel_entities(id,user_id,entity_type,name,metadata) VALUES($1,$2,$3,$4,$5)",[eid,u,type,name,json({synthetic:true,scenario:id})]);
+   for(const [s,t,r] of [[p,a,"owns"],[a,c1,"contractor"],[b,c1,"related_party"],[a,acct1,"controls"],[b,acct2,"controls"],[acct1,acct2,"transfer_link"]] as any[])
+    await c.query("INSERT INTO sentinel_edges(id,user_id,source_id,target_id,relation,metadata) VALUES($1,$2,$3,$4,$5,$6)",[randomUUID(),u,s,t,r,json({synthetic:true,scenario:id})]);
+   for(let i=0;i<12;i++) await c.query("INSERT INTO sentinel_events(id,user_id,event_type,occurred_at,entity_id,amount,currency,source,metadata) VALUES($1,$2,$3,now()-make_interval(days=>$4),$5,$6,'BRL','synthetic-scenario',$7)",[randomUUID(),u,id==="layered_transfers"?"transfer":id==="repeated_contracting"?"contract_payment":"procurement_payment",i%6, i%2?acct1:a, 5000+(i*1750),json({synthetic:true,scenario:id})]);
+  });
+  res.status(201).json({scenario:id,synthetic:true,message:"Cenário sintético executado. Nenhum resultado representa conclusão sobre pessoas ou organizações reais."});
+ }catch{res.status(500).json({error:"failed to run scenario"});}
+});
+
 export default router;
