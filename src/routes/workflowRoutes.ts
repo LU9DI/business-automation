@@ -23,7 +23,7 @@ router.post("/",requireAuth,async(req,res)=>{
     if(!idem||idem.length>200)return res.status(400).json({error:"invalid idempotency key"});
     const reservation=await reserveIdempotency(userId,"workflow.create",idem);
     if(reservation?.replay)return res.status(reservation.statusCode).json(reservation.response);
-    if(reservation?.inProgress)return res.status(409).json({error:"request already in progress"});
+    if(reservation && "inProgress" in reservation && reservation.inProgress)return res.status(409).json({error:"request already in progress"});
     const w=prepareWorkflow(req.body);
     const result=await withEntitlementLock(userId,"automations",async(client)=>{
       const count=await client.query("SELECT COUNT(*)::int count FROM workflows WHERE user_id=$1",[userId]);
