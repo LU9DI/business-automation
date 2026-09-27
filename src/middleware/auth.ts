@@ -16,3 +16,4 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ error: "invalid token" });
   }
 }
+export { signAccessToken } from "../core/jwt.js";
