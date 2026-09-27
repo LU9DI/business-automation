@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { prepareWorkflow, executeWorkflow } from "../services/workflowService.js";
 import { listConnectors } from "../services/connectors.js";
 import { redactedJson } from "../services/redaction.js";
-import { initDb } from "../core/db.js";
+import { initDb, withTransaction } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createWorkflowVersion, recordAttempt, ensureWorkflowVersion, lockWorkflowExclusive } from "../services/executionPolicy.js";
 import { audit, enforceLimit, getEntitlement, reserveIdempotency, completeIdempotency, withEntitlementLock, assertEntitlement } from "../core/platformGovernance.js";
@@ -64,42 +64,81 @@ router.post("/:id/run",requireAuth,async(req,res)=>{
     if(!UUID.test(String(req.params.id)))return res.status(400).json({error:"invalid workflow id"});
     const idempotencyKey=String(req.get("Idempotency-Key")||"").trim();
     if(!idempotencyKey||idempotencyKey.length>MAX_IDEMPOTENCY_KEY)return res.status(400).json({error:"invalid idempotency key"});
-    const r=await db.query("SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2",[req.params.id,userId]);
-    if(!r.rowCount)return res.status(404).json({error:"workflow not found"});
-    let workflow=prepareWorkflow(r.rows[0]);
-    const concurrent=await db.query("SELECT COUNT(*)::int count FROM workflow_runs WHERE user_id=$1 AND status IN ('running','queued')",[userId]);
-    if(Number(concurrent.rows[0].count)>=MAX_CONCURRENT_RUNS)return res.status(429).json({error:"concurrency limit reached",limit:MAX_CONCURRENT_RUNS});
-    const daily=await db.query("SELECT COUNT(*)::int count FROM workflow_runs WHERE user_id=$1 AND created_at >= now()-interval '24 hours'",[userId]);
-    if(Number(daily.rows[0].count)>=MAX_RUNS_PER_DAY)return res.status(429).json({error:"daily workflow run limit reached",limit:MAX_RUNS_PER_DAY});
-    if(!workflow.enabled)return res.status(409).json({error:"workflow is disabled"});
+    const admission = await withTransaction(async (client) => {
+      // Serialize per-user admission so concurrent requests cannot bypass the
+      // concurrency/daily execution limits between the check and INSERT.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [String(userId)]);
 
-    const existing=await db.query("SELECT id,status,output,error FROM workflow_runs WHERE workflow_id=$1 AND user_id=$2 AND idempotency_key=$3",[req.params.id,userId,idempotencyKey]);
-    if(existing.rowCount){
-      const row=existing.rows[0];
-      if(row.status==="succeeded")return res.json({runId:row.id,status:row.status,output:row.output,duplicate:true});
-      if(row.status==="running"||row.status==="queued")return res.status(409).json({error:"workflow run already in progress",runId:row.id,status:row.status,duplicate:true});
-      return res.status(409).json({error:"workflow run already completed with failure",runId:row.id,status:row.status,duplicate:true});
+      const r = await client.query(
+        "SELECT id,name,enabled,steps FROM workflows WHERE id=$1 AND user_id=$2",
+        [req.params.id, userId],
+      );
+      if (!r.rowCount) return { kind: "not_found" as const };
+
+      let workflow = prepareWorkflow(r.rows[0]);
+      if (!workflow.enabled) return { kind: "disabled" as const };
+
+      const existing = await client.query(
+        "SELECT id,status,output,error FROM workflow_runs WHERE workflow_id=$1 AND user_id=$2 AND idempotency_key=$3",
+        [req.params.id, userId, idempotencyKey],
+      );
+      if (existing.rowCount) return { kind: "duplicate" as const, row: existing.rows[0] };
+
+      const concurrent = await client.query(
+        "SELECT COUNT(*)::int count FROM workflow_runs WHERE user_id=$1 AND status IN ('running','queued')",
+        [userId],
+      );
+      if (Number(concurrent.rows[0].count) >= MAX_CONCURRENT_RUNS) {
+        return { kind: "concurrency" as const };
+      }
+
+      const daily = await client.query(
+        "SELECT COUNT(*)::int count FROM workflow_runs WHERE user_id=$1 AND created_at >= now()-interval '24 hours'",
+        [userId],
+      );
+      if (Number(daily.rows[0].count) >= MAX_RUNS_PER_DAY) {
+        return { kind: "daily" as const };
+      }
+
+      const version = await ensureWorkflowVersion(String(req.params.id), userId, client);
+      if (!version) return { kind: "not_found" as const };
+
+      const snapshot = typeof version.definition === "string"
+        ? JSON.parse(version.definition)
+        : version.definition;
+
+      await client.query(
+        "INSERT INTO workflow_runs (id,workflow_id,workflow_version_id,user_id,status,input,started_at,idempotency_key) VALUES ($1,$2,$3,$4,'running',$5,now(),$6)",
+        [runId, req.params.id, version.id, userId, redactedJson(req.body || {}), idempotencyKey],
+      );
+
+      return {
+        kind: "admitted" as const,
+        workflow: prepareWorkflow(snapshot),
+      };
+    });
+
+    if (admission.kind === "not_found") return res.status(404).json({ error: "workflow not found" });
+    if (admission.kind === "disabled") return res.status(409).json({ error: "workflow is disabled" });
+    if (admission.kind === "concurrency") {
+      return res.status(429).json({ error: "concurrency limit reached", limit: MAX_CONCURRENT_RUNS });
+    }
+    if (admission.kind === "daily") {
+      return res.status(429).json({ error: "daily workflow run limit reached", limit: MAX_RUNS_PER_DAY });
+    }
+    if (admission.kind === "duplicate") {
+      const row = admission.row;
+      if (row.status === "succeeded") {
+        return res.json({ runId: row.id, status: row.status, output: row.output, duplicate: true });
+      }
+      if (row.status === "running" || row.status === "queued") {
+        return res.status(409).json({ error: "workflow run already in progress", runId: row.id, status: row.status, duplicate: true });
+      }
+      return res.status(409).json({ error: "workflow run already completed with failure", runId: row.id, status: row.status, duplicate: true });
     }
 
-    try{
-      await db.query("BEGIN");
-      const version=await ensureWorkflowVersion(String(req.params.id),userId,db);
-      if(!version){await db.query("ROLLBACK");return res.status(404).json({error:"workflow not found"});}
-      const snapshot=typeof version.definition==="string"?JSON.parse(version.definition):version.definition;
-      await db.query("INSERT INTO workflow_runs (id,workflow_id,workflow_version_id,user_id,status,input,started_at,idempotency_key) VALUES ($1,$2,$3,$4,'running',$5,now(),$6)",[runId,req.params.id,version.id,userId,redactedJson(req.body||{}),idempotencyKey]);
-      await db.query("COMMIT");
-      inserted=true;
-      r.rows[0]={...r.rows[0],...snapshot};
-      workflow=prepareWorkflow(snapshot);
-    }catch(error:any){
-      if(error?.code!=="23505"){await db.query("ROLLBACK").catch(()=>{});throw error;}
-      await db.query("ROLLBACK").catch(()=>{});
-      const raced=await db.query("SELECT id,status,output FROM workflow_runs WHERE workflow_id=$1 AND user_id=$2 AND idempotency_key=$3",[req.params.id,userId,idempotencyKey]);
-      if(!raced.rowCount)return res.status(409).json({error:"workflow run could not be established"});
-      const row=raced.rows[0];
-      if(row.status==="succeeded")return res.json({runId:row.id,status:row.status,output:row.output,duplicate:true});
-      return res.status(409).json({error:"workflow run already in progress",runId:row.id,status:row.status,duplicate:true});
-    }
+    inserted = true;
+    const workflow = admission.workflow;
 
     await recordAttempt(runId,1,"running",undefined,(await db.query("SELECT workflow_version_id FROM workflow_runs WHERE id=$1",[runId])).rows[0]?.workflow_version_id);
     const result=await executeWorkflow(workflow,req.body||{});
