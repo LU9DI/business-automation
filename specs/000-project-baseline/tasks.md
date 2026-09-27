@@ -13,6 +13,7 @@
 
 ## Phase 3 — Product quality
 - [x] T014 Enforce workflow concurrency/daily execution limits on direct and webhook execution paths.
+- [x] T015 Serialize webhook admission per user so concurrent requests cannot bypass execution limits; keep idempotency inside the same transaction.
 - [ ] T008 Verify public SEO/indexability surfaces and canonical URLs.
 - [ ] T009 Run a focused security review of outbound integrations and webhook/scheduler boundaries.
 - [x] T010 Verify production deployment/runtime behavior after each release.
