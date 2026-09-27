@@ -7,14 +7,15 @@
 
 ## Phase 2 — Acquisition completion
 - [x] T004 Audit and expand the acquisition funnel/report: leads, outreach, delivery/publication, failures, retries, and conversion signals.
-- [ ] T005 — Implement bounded retry/recovery for retryable outreach failures: max 3 attempts, backoff, idempotency, no duplicate send, and exhaustion events. Production deploy verified live.
+- [x] T005 — Implement bounded retry/recovery for retryable outreach failures: max 3 attempts, backoff, idempotency, no duplicate send, and exhaustion events. Production deploy verified live.
 - [ ] T006 Add distribution adapters only for verified/configured integrations.
 - [ ] T007 Add end-to-end tests for acquisition idempotency, cooldown, suppression, provider fallback, and failure handling.
 
 ## Phase 3 — Product quality
+- [x] T014 Enforce workflow concurrency/daily execution limits on direct and webhook execution paths.
 - [ ] T008 Verify public SEO/indexability surfaces and canonical URLs.
 - [ ] T009 Run a focused security review of outbound integrations and webhook/scheduler boundaries.
-- [ ] T010 Verify production deployment/runtime behavior after each release.
+- [x] T010 Verify production deployment/runtime behavior after each release.
 
 ## Phase 4 — Convergence
 - [ ] T011 Run Spec Kit consistency analysis across spec/plan/tasks.
