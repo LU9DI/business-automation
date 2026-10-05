@@ -11,7 +11,7 @@ test("access tokens round-trip with subject and role", () => {
 });
 
 test("tokens signed with the previous secret remain verifiable during rotation", () => {
-  process.env.JWT_SECRET = "current-secret-that-is-at-least-32-characters-long";
+  process.env.JWT_SECRET = "previous-secret-that-is-at-least-32-characters-long";
   process.env.JWT_SECRET_PREVIOUS = "previous-secret-that-is-at-least-32-characters-long";
 
   const token = signAccessToken({ sub: "rotation-user" });
