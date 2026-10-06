@@ -13,14 +13,20 @@ try {
   await client.query("CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
   await client.query("SELECT pg_advisory_lock(hashtext('application_migrations'))");
 
-  const state = await client.query("SELECT COUNT(*)::int AS count FROM schema_migrations");
-  if (state.rows[0].count === 0) {
+  const requiredBaseTables = ["app_users","workflows"];
+  const missingBaseTables = [];
+  for (const table of requiredBaseTables) {
+    const result = await client.query("SELECT to_regclass($1) IS NULL AS missing", [`public.${table}`]);
+    if (result.rows[0].missing) missingBaseTables.push(table);
+  }
+
+  if (missingBaseTables.length > 0) {
     const schemaSql = await readFile(schemaPath, "utf8");
     await client.query("BEGIN");
     try {
       await client.query(schemaSql);
       await client.query("COMMIT");
-      console.log("bootstrap schema applied");
+      console.log("bootstrap schema applied; missing:", missingBaseTables.join(","));
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -36,10 +42,7 @@ try {
     await client.query("BEGIN");
     try {
       await client.query(sql);
-      await client.query(
-        "INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT(version) DO NOTHING",
-        [version]
-      );
+      await client.query("INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT(version) DO NOTHING", [version]);
       await client.query("COMMIT");
       console.log("migration applied:", version);
     } catch (error) {
