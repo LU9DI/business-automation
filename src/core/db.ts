@@ -9,14 +9,25 @@ const positiveInt = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 };
 
+const normalizeDatabaseUrl = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    parsed.searchParams.delete("sslmode");
+    parsed.searchParams.delete("uselibpqcompat");
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+};
+
 export function initDb() {
   if (!pool) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL is required");
 
-    const isLocal = /localhost|127\.0\.0\.1/.test(url);
+    const isLocal = /localhost|127\.0.0.1/.test(url);
     pool = new Pool({
-      connectionString: url,
+      connectionString: normalizeDatabaseUrl(url),
       ssl: isLocal ? false : { rejectUnauthorized: true },
       max: positiveInt(process.env.PG_POOL_MAX, 5),
       connectionTimeoutMillis: positiveInt(process.env.PG_CONNECT_TIMEOUT_MS, 10000),
@@ -28,7 +39,7 @@ export function initDb() {
     pool.on("error", (error) => {
       console.error(JSON.stringify({ event: "db.pool_error", error: error.message }));
     });
-    pool.on("error", (error) => console.error(JSON.stringify({ event: "db.pool_error", error: error.message })));
+
   }
 
   return pool;
