@@ -5,14 +5,27 @@ import { initDb } from "../src/core/db.js";
 
 const db = initDb();
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "../migrations");
-const files = (await readdir(migrationsDir))
-  .filter((file) => file.endsWith(".sql"))
-  .sort();
+const schemaPath = join(dirname(fileURLToPath(import.meta.url)), "../src/db/schema.sql");
+const files = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
 
 const client = await db.connect();
 try {
   await client.query("CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
   await client.query("SELECT pg_advisory_lock(hashtext('application_migrations'))");
+
+  const state = await client.query("SELECT COUNT(*)::int AS count FROM schema_migrations");
+  if (state.rows[0].count === 0) {
+    const schemaSql = await readFile(schemaPath, "utf8");
+    await client.query("BEGIN");
+    try {
+      await client.query(schemaSql);
+      await client.query("COMMIT");
+      console.log("bootstrap schema applied");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  }
 
   for (const file of files) {
     const version = file.replace(/\.sql$/, "");
@@ -40,5 +53,4 @@ try {
 } finally {
   await client.query("SELECT pg_advisory_unlock(hashtext('application_migrations'))").catch(() => {});
   client.release();
-  await db.end();
 }
