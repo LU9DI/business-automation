@@ -5,6 +5,7 @@ import workflowRoutes from "./src/routes/workflowRoutes.js";
 import webhookRoutes from "./src/routes/webhookRoutes.js";
 import express from "express";
 import acquisitionRoutes from "./src/routes/acquisitionRoutes.js";
+import operationsRoutes from "./src/routes/operationsRoutes.js";
 import cors from "cors";
 import { initDb, closeDb } from "./src/core/db.js";
 import { metricsMiddleware, metricsSnapshot } from "./src/core/metrics.js";
@@ -70,6 +71,7 @@ app.use(sentinelIntegrationMiddleware);
 app.use("/api/auth", authRoutes);
 app.use("/api/platform", platformRoutes);
 app.use("/api/workflows", workflowRoutes);
+app.use("/api/workflows", operationsRoutes);
 app.use("/api/webhooks", webhookRoutes);
 
 
