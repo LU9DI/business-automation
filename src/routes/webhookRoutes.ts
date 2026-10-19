@@ -5,7 +5,7 @@ import { initDb, withTransaction } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { prepareWorkflow, executeWorkflow } from "../services/workflowService.js";
 import { redactedJson } from "../services/redaction.js";
-import { validateWebhookIdempotencyKey } from "../domain/webhookIdempotency.js";
+import { validateWebhookIdempotencyKey, validateWebhookActiveUpdate } from "../domain/webhookIdempotency.js";
 
 const router = Router();
 const MAX_RUNS_PER_DAY = 500;
@@ -42,8 +42,10 @@ router.get("/:workflowId", requireAuth, async (req, res) => {
 });
 
 router.patch("/:workflowId", requireAuth, async (req, res) => {
+  const activeUpdate = validateWebhookActiveUpdate(req.body?.active);
+  if (!activeUpdate.valid) return res.status(400).json({ error: "active must be a boolean" });
   try {
-    const active = Boolean(req.body?.active);
+    const active = activeUpdate.active;
     const r = await initDb().query(
       "UPDATE workflow_webhooks SET active=$1 WHERE workflow_id=$2 AND user_id=$3 RETURNING workflow_id,active",
       [active, req.params.workflowId, (req as any).userId],
