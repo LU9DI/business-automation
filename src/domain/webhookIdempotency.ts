@@ -7,3 +7,9 @@ export function validateWebhookIdempotencyKey(raw: string | undefined): WebhookI
   if (key.length > 200) return { valid: false };
   return key ? { valid: true, key } : { valid: true };
 }
+
+export type WebhookActiveUpdateResult = { valid: true; active: boolean } | { valid: false };
+
+export function validateWebhookActiveUpdate(value: unknown): WebhookActiveUpdateResult {
+  return typeof value === "boolean" ? { valid: true, active: value } : { valid: false };
+}
