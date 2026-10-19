@@ -87,6 +87,7 @@ router.post("/:workflowId", async (req, res) => {
       return res.status(400).json({ error: "idempotency key must not exceed 200 characters" });
     }
     const idempotencyKey = idempotencyKeyResult.key;
+    if (!idempotencyKey) return res.status(400).json({ error: "idempotency key is required" });
     const admission = await withTransaction(async (client) => {
       // Serialize admission per user so concurrent requests cannot all pass the same limits.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [String(hook.rows[0].user_id)]);
