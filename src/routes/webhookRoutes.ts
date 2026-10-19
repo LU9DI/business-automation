@@ -5,6 +5,7 @@ import { initDb, withTransaction } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { prepareWorkflow, executeWorkflow } from "../services/workflowService.js";
 import { redactedJson } from "../services/redaction.js";
+import { validateWebhookIdempotencyKey } from "../domain/webhookIdempotency.js";
 
 const router = Router();
 const MAX_RUNS_PER_DAY = 500;
@@ -79,11 +80,11 @@ router.post("/:workflowId", async (req, res) => {
     const w = prepareWorkflow(hook.rows[0]);
     if (!w.enabled) return res.status(409).json({ error: "workflow is disabled" });
 
-    const rawIdempotencyKey = (req.header("idempotency-key") || "").trim();
-    if (rawIdempotencyKey.length > 200) {
+    const idempotencyKeyResult = validateWebhookIdempotencyKey(req.header("idempotency-key"));
+    if (!idempotencyKeyResult.valid) {
       return res.status(400).json({ error: "idempotency key must not exceed 200 characters" });
     }
-    const idempotencyKey = rawIdempotencyKey || undefined;
+    const idempotencyKey = idempotencyKeyResult.key;
     const admission = await withTransaction(async (client) => {
       // Serialize admission per user so concurrent requests cannot all pass the same limits.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [String(hook.rows[0].user_id)]);
