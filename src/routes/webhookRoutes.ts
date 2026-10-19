@@ -5,6 +5,7 @@ import { initDb, withTransaction } from "../core/db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { prepareWorkflow, executeWorkflow } from "../services/workflowService.js";
 import { redactedJson } from "../services/redaction.js";
+import { validateWebhookIdempotencyKey, validateWebhookActiveUpdate } from "../domain/webhookIdempotency.js";
 
 const router = Router();
 const MAX_RUNS_PER_DAY = 500;
@@ -41,8 +42,10 @@ router.get("/:workflowId", requireAuth, async (req, res) => {
 });
 
 router.patch("/:workflowId", requireAuth, async (req, res) => {
+  const activeUpdate = validateWebhookActiveUpdate(req.body?.active);
+  if (!activeUpdate.valid) return res.status(400).json({ error: "active must be a boolean" });
   try {
-    const active = Boolean(req.body?.active);
+    const active = activeUpdate.active;
     const r = await initDb().query(
       "UPDATE workflow_webhooks SET active=$1 WHERE workflow_id=$2 AND user_id=$3 RETURNING workflow_id,active",
       [active, req.params.workflowId, (req as any).userId],
@@ -79,7 +82,12 @@ router.post("/:workflowId", async (req, res) => {
     const w = prepareWorkflow(hook.rows[0]);
     if (!w.enabled) return res.status(409).json({ error: "workflow is disabled" });
 
-    const idempotencyKey = (req.header("idempotency-key") || "").trim().slice(0, 200) || undefined;
+    const idempotencyKeyResult = validateWebhookIdempotencyKey(req.header("idempotency-key"));
+    if (!idempotencyKeyResult.valid) {
+      return res.status(400).json({ error: "idempotency key must not exceed 200 characters" });
+    }
+    const idempotencyKey = idempotencyKeyResult.key;
+    if (!idempotencyKey) return res.status(400).json({ error: "idempotency key is required" });
     const admission = await withTransaction(async (client) => {
       // Serialize admission per user so concurrent requests cannot all pass the same limits.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [String(hook.rows[0].user_id)]);
