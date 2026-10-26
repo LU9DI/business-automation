@@ -16,13 +16,13 @@ jobs:
       - name: Get GitHub OIDC token
         id: oidc
         shell: bash
-        env:
-          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: |
           set -euo pipefail
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub Actions did not provide the OIDC request URL; verify id-token: write permission}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub Actions did not provide the OIDC request token; verify id-token: write permission}"
           token_json="$(curl -fsS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=filtra-acquisition")"
           token="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "${token_json}")"
+          echo "::add-mask::${token}"
           echo "token=${token}" >> "$GITHUB_OUTPUT"
 
       - name: Trigger acquisition
