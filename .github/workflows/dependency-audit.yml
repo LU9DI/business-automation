@@ -33,3 +33,11 @@ jobs:
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - name: Audit high and critical dependency vulnerabilities
         run: npm audit --audit-level=high
+      - name: Upload temporary lockfile for reproducibility review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: temporary-package-lock
+          path: package-lock.json
+          if-no-files-found: warn
+          retention-days: 3
